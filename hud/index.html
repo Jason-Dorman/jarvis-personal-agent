@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --abyss:#020812;
+  --deep:#061624;
+  --ion:#6fe7ff;
+  --ion-dim:rgba(111,231,255,.35);
+  --ion-faint:rgba(111,231,255,.10);
+  --ice:#e4fbff;
+  --text:#bfeaf7;
+  --muted:#5f8c9c;
+  --amber:#ffb547;
+  --red:#ff5d62;
+  --mint:#7dffb8;
+  --font:'Chakra Petch', system-ui, sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;overflow:hidden;background:var(--abyss);color:var(--text);
+  font-family:var(--font);font-size:15px;line-height:1.4;-webkit-font-smoothing:antialiased;
+}
+/* backdrop: glow + fine grid fading out from the core */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 55% 50% at 50% 44%, rgba(26,110,150,.30), transparent 72%),
+    linear-gradient(rgba(111,231,255,.045) 1px, transparent 1px) 0 0/44px 44px,
+    linear-gradient(90deg, rgba(111,231,255,.045) 1px, transparent 1px) 0 0/44px 44px;
+  -webkit-mask-image:radial-gradient(ellipse 80% 75% at 50% 45%, #000 30%, transparent 85%);
+          mask-image:radial-gradient(ellipse 80% 75% at 50% 45%, #000 30%, transparent 85%);
+}
+/* scanlines */
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
+  background:repeating-linear-gradient(0deg, rgba(255,255,255,.022) 0 1px, transparent 1px 3px);
+}
+.hud{position:relative;z-index:1;display:grid;grid-template-rows:auto 1fr auto auto auto;height:100vh}
+
+/* ---------- top bar ---------- */
+.top{
+  display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;
+  padding:14px 28px 10px;border-bottom:1px solid var(--ion-faint);
+}
+.brand{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;letter-spacing:.04em}
+.brand svg{width:22px;height:22px}
+.time{text-align:center}
+.clock{font-size:24px;font-weight:500;color:var(--ice);font-variant-numeric:tabular-nums;letter-spacing:.08em;line-height:1}
+.date{font-size:12px;color:var(--muted);margin-top:3px}
+.status{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+.linkstate{font-size:12px;color:var(--muted);display:flex;gap:7px;align-items:center;margin-right:6px}
+.linkstate i{width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber)}
+body[data-live="1"] .linkstate i{background:var(--mint);box-shadow:0 0 8px var(--mint)}
+.pill{
+  font-size:12px;padding:3px 10px;border:1px solid var(--ion-faint);color:var(--muted);
+  clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);
+  transition:background .2s,color .2s,border-color .2s;
+}
+.pill.busy{color:var(--abyss);background:var(--amber);border-color:var(--amber)}
+
+/* ---------- stage ---------- */
+.stage{
+  position:relative;display:grid;
+  grid-template-columns:minmax(250px,1fr) minmax(320px,1.2fr) minmax(250px,1fr);
+  gap:32px;padding:20px 28px 6px;min-height:0;
+}
+.col{position:relative;z-index:2;display:flex;flex-direction:column;gap:14px;min-height:0;overflow:hidden}
+.center{position:relative;display:grid;place-items:center;min-height:0}
+.core-wrap{position:relative;width:min(100%, 66vh);aspect-ratio:1}
+#core{position:absolute;inset:0;width:100%;height:100%}
+.readout{position:absolute;inset:0;display:grid;place-content:center;text-align:center;pointer-events:none}
+#state-label{
+  font-size:clamp(18px,2vw,26px);font-weight:600;color:var(--ice);letter-spacing:.1em;
+  text-shadow:0 0 18px rgba(111,231,255,.6);transition:color .3s;
+}
+#state-sub{font-size:12px;color:var(--muted);margin-top:4px}
+body[data-state="thinking"] #state-label{color:var(--amber);text-shadow:0 0 18px rgba(255,181,71,.55)}
+
+#links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+.link-path{fill:none;stroke:var(--ion);stroke-width:1;opacity:.28;transition:opacity .4s}
+.link-path.fresh{stroke-dasharray:900;stroke-dashoffset:900;animation:draw .8s ease-out forwards;opacity:.85}
+.link-path.lit{opacity:.95;filter:drop-shadow(0 0 4px var(--ion))}
+.link-dot{fill:var(--ion);opacity:.75}
+@keyframes draw{to{stroke-dashoffset:0}}
+
+/* ---------- conversation log ---------- */
+.log{
+  flex:0 1 auto;max-height:36%;overflow:auto;padding:2px 4px 8px 12px;
+  border-left:1px solid var(--ion-faint);display:flex;flex-direction:column;gap:9px;font-size:13px;
+  scrollbar-width:none;
+  -webkit-mask-image:linear-gradient(to bottom, transparent, #000 18%);
+          mask-image:linear-gradient(to bottom, transparent, #000 18%);
+}
+.log::-webkit-scrollbar{display:none}
+.entry .who{display:block;font-size:11px;color:var(--muted)}
+.entry.reply .txt{color:var(--ice)}
+
+/* ---------- cards ---------- */
+.slot{position:relative;flex:0 0 auto}
+.slot.enter{animation:reveal .75s cubic-bezier(.2,.7,.2,1) both}
+.slot.enter::after{
+  content:"";position:absolute;left:-4px;right:-4px;height:2px;top:0;pointer-events:none;
+  background:var(--ion);box-shadow:0 0 14px 2px var(--ion);
+  animation:sweep .75s cubic-bezier(.2,.7,.2,1) both;
+}
+@keyframes reveal{from{clip-path:inset(0 0 100% 0);opacity:.3}to{clip-path:inset(0 0 0 0);opacity:1}}
+@keyframes sweep{from{top:0;opacity:1}85%{opacity:1}to{top:100%;opacity:0}}
+.slot.leave{transition:opacity .35s, transform .35s;opacity:0;transform:scale(.97)}
+
+.card{
+  --c:var(--ion);position:relative;padding:12px 16px 14px;
+  background:linear-gradient(160deg, rgba(20,62,86,.42), rgba(4,16,26,.62));
+  border:1px solid rgba(111,231,255,.22);
+  clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));
+  transition:border-color .3s, background .3s;
+}
+.card::before{content:"";position:absolute;top:0;left:0;width:40px;height:2px;background:var(--c)}
+.card[data-status="warn"]{--c:var(--amber)}
+.card[data-status="alert"]{--c:var(--red)}
+.card.lit{border-color:rgba(111,231,255,.8);background:linear-gradient(160deg, rgba(32,100,130,.58), rgba(4,16,26,.72))}
+.card header{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:6px}
+.card h3{margin:0;font-size:13px;font-weight:500;color:var(--text);letter-spacing:.03em}
+.src{font-size:11px;color:var(--muted);white-space:nowrap}
+.value{
+  font-size:clamp(28px,2.6vw,40px);font-weight:500;color:var(--ice);font-variant-numeric:tabular-nums;
+  line-height:1.05;text-shadow:0 0 22px rgba(111,231,255,.35);
+}
+.unit{font-size:13px;color:var(--muted);margin-left:6px;text-shadow:none}
+.delta{font-size:13px;font-variant-numeric:tabular-nums;margin-top:4px}
+.up{color:var(--mint)} .down{color:var(--red)} .flat{color:var(--muted)}
+.dlabel{color:var(--muted);margin-left:6px}
+.spark{display:block;width:100%;height:46px;margin-top:8px}
+.kind-chart .spark{height:120px}
+.spark .line{fill:none;stroke:var(--c);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.spark .area{fill:rgba(111,231,255,.07)}
+.spark .band{fill:rgba(125,255,184,.06);stroke:rgba(125,255,184,.4);stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
+.stats{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-top:6px;font-variant-numeric:tabular-nums}
+.stats b{color:var(--ice);font-weight:500}
+.rows{display:grid;grid-template-columns:auto 1fr auto auto;gap:7px 12px;align-items:center;font-variant-numeric:tabular-nums;font-size:14px}
+.rows .sym{color:var(--ice);font-weight:500}
+.rows .bar{height:3px;background:rgba(111,231,255,.08);position:relative}
+.rows .bar i{position:absolute;top:0;bottom:0;left:0;background:currentColor;opacity:.8}
+.rows .num{text-align:right;color:var(--text)}
+.heads{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.heads .h{color:var(--ice);font-size:14px;line-height:1.35}
+.heads .m{font-size:11px;color:var(--muted)}
+.note-text{font-size:16px;color:var(--ice);margin:2px 0 0}
+
+/* ---------- caption ---------- */
+.caption{
+  position:relative;z-index:2;text-align:center;padding:2px 28px 4px;min-height:92px;
+  display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;
+}
+#heard{font-size:13px;color:var(--muted);min-height:18px}
+#prev{font-size:15px;color:rgba(191,234,247,.38);max-width:72ch;min-height:20px}
+#line{
+  font-size:clamp(18px,1.9vw,24px);color:var(--ice);max-width:58ch;min-height:32px;
+  text-shadow:0 0 16px rgba(111,231,255,.35);
+}
+#line.typing::after{
+  content:"";display:inline-block;width:.45em;height:1em;background:var(--ion);
+  margin-left:3px;vertical-align:-2px;animation:blink 1s steps(2) infinite;
+}
+@keyframes blink{50%{opacity:0}}
+
+/* ---------- input ---------- */
+.ask{display:flex;gap:10px;align-items:center;justify-content:center;padding:6px 28px 12px}
+.ask input{
+  width:min(560px,64vw);background:rgba(6,22,34,.72);border:1px solid rgba(111,231,255,.25);
+  color:var(--ice);font:inherit;font-size:14px;padding:10px 14px;outline:none;
+}
+.ask input::placeholder{color:var(--muted)}
+.ask input:focus-visible{border-color:var(--ion);box-shadow:0 0 0 1px var(--ion)}
+.mic{
+  font:inherit;font-size:13px;color:var(--ion);background:transparent;border:1px solid var(--ion-dim);
+  padding:10px 14px;cursor:pointer;user-select:none;touch-action:none;
+  clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);
+}
+.mic:focus-visible{outline:2px solid var(--ion);outline-offset:2px}
+.mic.on{background:var(--ion);color:var(--abyss)}
+.badge{
+  font-size:12px;color:var(--abyss);background:var(--amber);padding:3px 10px;
+  clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);
+}
+body[data-live="1"] .badge{display:none}
+
+/* ---------- ticker ---------- */
+.ticker{
+  border-top:1px solid var(--ion-faint);overflow:hidden;white-space:nowrap;font-size:13px;height:32px;
+  display:flex;align-items:center;background:rgba(2,10,18,.6);font-variant-numeric:tabular-nums;
+}
+.track{display:inline-flex;gap:38px;padding-left:28px;animation:tick 45s linear infinite}
+.track span{color:var(--muted)}
+.track b{color:var(--ice);font-weight:500;margin-right:7px}
+.track em{font-style:normal;margin-left:7px}
+@keyframes tick{to{transform:translateX(-50%)}}
+
+@media (max-width:960px){
+  body{overflow:auto}
+  .hud{height:auto;min-height:100vh}
+  .top{grid-template-columns:1fr auto;padding:12px 16px}
+  .brand{display:none}
+  .stage{grid-template-columns:1fr;padding:12px 16px;gap:16px}
+  .center{order:-1}
+  .core-wrap{width:min(100%,340px)}
+  #links{display:none}
+  .col{overflow:visible}
+  .log{max-height:180px}
+  .caption,.ask{padding-left:16px;padding-right:16px}
+  .ask input{width:100%}
+}
+@media (prefers-reduced-motion: reduce){
+  .slot.enter,.slot.enter::after,.link-path.fresh{animation:none}
+  .link-path.fresh{stroke-dasharray:none}
+  .track{animation-duration:160s}
+}
+</style>
+</head>
+<body data-state="idle" data-live="0">
+<div class="hud">
+
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>
+        <path d="M12 1v4M12 19v4M1 12h4M19 12h4"/>
+      </svg>
+      Markets and digital assets
+    </div>
+    <div class="time">
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="date" id="date"></div>
+    </div>
+    <div class="status">
+      <span class="linkstate"><i></i><span id="linktext">Connecting</span></span>
+      <span class="badge">Demo data</span>
+      <span id="pills" style="display:contents"></span>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+    <svg id="links" aria-hidden="true"></svg>
+
+    <section class="col left" id="colLeft" aria-label="Panels">
+      <div class="log" id="log" aria-live="polite" aria-label="Conversation"></div>
+    </section>
+
+    <section class="center">
+      <div class="core-wrap">
+        <canvas id="core" aria-hidden="true"></canvas>
+        <div class="readout">
+          <div id="state-label">Standing by</div>
+          <div id="state-sub">Say the wake word or hold Space</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="col right" id="colRight" aria-label="Panels"></section>
+  </main>
+
+  <section class="caption" aria-live="polite">
+    <div id="heard"></div>
+    <div id="prev"></div>
+    <div id="line"></div>
+  </section>
+
+  <form class="ask" id="ask" autocomplete="off">
+    <input id="q" type="text" placeholder="Type a question, or hold Space to talk" aria-label="Ask a question">
+    <button type="button" class="mic" id="mic">Hold to talk</button>
+  </form>
+
+  <footer class="ticker" aria-label="Watchlist">
+    <div class="track" id="track"><span>Watchlist feed idle</span></div>
+  </footer>
+</div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const params = new URLSearchParams(location.search);
+
+const S = {
+  state: 'idle', level: 0, target: 0, levelAt: 0,
+  sats: [], pending: [], placed: [],
+  live: false, ws: null, reply: null, demoStarted: false,
+};
+
+/* ================= helpers ================= */
+function el(tag, cls, text){
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+function fmt(v, dec){
+  if (typeof v !== 'number') return String(v ?? '');
+  const d = dec ?? (Math.abs(v) >= 1000 ? 0 : 2);
+  return v.toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d});
+}
+function deltaEl(delta, label){
+  const wrap = el('div', 'delta');
+  if (delta == null) return wrap;
+  let cls = 'flat', txt = String(delta);
+  if (typeof delta === 'number'){
+    cls = delta > 0.0001 ? 'up' : delta < -0.0001 ? 'down' : 'flat';
+    txt = (delta > 0 ? '+' : '') + delta.toFixed(1) + '%';
+  }
+  wrap.appendChild(el('span', cls, txt));
+  if (label) wrap.appendChild(el('span', 'dlabel', label));
+  return wrap;
+}
+function lineSVG(series, band){
+  const vals = (series || []).map(Number).filter(Number.isFinite);
+  if (vals.length < 2) return '';
+  const w = 300, h = 100;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (band){ lo = Math.min(lo, band[0]); hi = Math.max(hi, band[1]); }
+  const pad = (hi - lo) * 0.12 || 1e-6; lo -= pad; hi += pad;
+  const x = i => (i / (vals.length - 1)) * w;
+  const y = v => h - ((v - lo) / (hi - lo)) * h;
+  const pts = vals.map((v,i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+  let s = `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">`;
+  if (band){
+    const top = y(band[1]), bot = y(band[0]);
+    s += `<rect class="band" x="0" y="${top.toFixed(1)}" width="${w}" height="${(bot-top).toFixed(1)}"/>`;
+  }
+  s += `<polygon class="area" points="0,${h} ${pts} ${w},${h}"/>`;
+  s += `<polyline class="line" points="${pts}"/></svg>`;
+  return s;
+}
+function keysOf(c){
+  if (Array.isArray(c.keys) && c.keys.length) return c.keys.map(k => String(k).toLowerCase());
+  const caps = (c.title || '').match(/\b[A-Z]{2,}\b/g);
+  return (caps && caps.length ? caps : [c.title || '']).map(k => k.toLowerCase());
+}
+
+/* ================= cards ================= */
+function renderCard(c){
+  const slot = el('div', 'slot');
+  const card = el('article', 'card kind-' + (c.kind || 'text'));
+  if (c.status) card.dataset.status = c.status;
+  if (c.kind === 'alert' && !c.status) card.dataset.status = 'alert';
+  const head = el('header');
+  head.appendChild(el('h3', null, c.title || ''));
+  if (c.source) head.appendChild(el('span', 'src', c.source));
+  card.appendChild(head);
+
+  switch (c.kind){
+    case 'metric': {
+      const v = el('div', 'value', fmt(c.value, c.decimals));
+      if (c.unit) v.appendChild(el('span', 'unit', c.unit));
+      card.appendChild(v);
+      card.appendChild(deltaEl(c.delta, c.delta_label));
+      if (c.spark) card.insertAdjacentHTML('beforeend', lineSVG(c.spark, c.band));
+      break;
+    }
+    case 'chart': {
+      card.insertAdjacentHTML('beforeend', lineSVG(c.series, c.band));
+      const vals = (c.series || []).map(Number).filter(Number.isFinite);
+      if (vals.length){
+        const st = el('div', 'stats');
+        [['Low', Math.min(...vals)], ['High', Math.max(...vals)], ['Last', vals[vals.length-1]]].forEach(([k,v]) => {
+          const s = el('span', null, k + ' ');
+          s.appendChild(el('b', null, fmt(v, c.decimals)));
+          st.appendChild(s);
+        });
+        card.appendChild(st);
+      }
+      break;
+    }
+    case 'metrics': {
+      const rows = el('div', 'rows');
+      const max = Math.max(1e-9, ...(c.rows || []).map(r => Math.abs(Number(r.delta) || 0)));
+      (c.rows || []).forEach(r => {
+        const d = Number(r.delta) || 0;
+        const cls = d > 0 ? 'up' : d < 0 ? 'down' : 'flat';
+        rows.appendChild(el('span', 'sym', r.label));
+        const bar = el('span', 'bar ' + cls);
+        const fill = el('i'); fill.style.width = (Math.abs(d) / max * 100).toFixed(0) + '%';
+        bar.appendChild(fill); rows.appendChild(bar);
+        rows.appendChild(el('span', 'num', fmt(r.value, r.decimals)));
+        rows.appendChild(el('span', 'num ' + cls, (d > 0 ? '+' : '') + d.toFixed(1) + '%'));
+      });
+      card.appendChild(rows);
+      break;
+    }
+    case 'headlines': {
+      const ul = el('ul', 'heads');
+      (c.items || []).forEach(it => {
+        const li = el('li');
+        li.appendChild(el('div', 'h', it.title));
+        li.appendChild(el('div', 'm', [it.source, it.age].filter(Boolean).join(', ')));
+        ul.appendChild(li);
+      });
+      card.appendChild(ul);
+      break;
+    }
+    default:
+      card.appendChild(el('p', 'note-text', c.text || ''));
+  }
+  slot.appendChild(card);
+  return slot;
+}
+
+function sideCounts(){
+  let left = 0, right = 0;
+  S.placed.forEach(p => p.side === 'left' ? left++ : right++);
+  return {left, right};
+}
+const CAP = {left: 2, right: 3};
+
+function place(c, lit){
+  // Update in place if this id is already on screen
+  const existing = c.id && S.placed.find(p => p.card.id === c.id);
+  if (existing){
+    const fresh = renderCard(c);
+    existing.slot.replaceWith(fresh);
+    existing.slot = fresh; existing.card = c;
+    if (lit) light(existing);
+    requestAnimationFrame(drawLinks);
+    return;
+  }
+  let {left, right} = sideCounts();
+  if (left >= CAP.left && right >= CAP.right){
+    removePlaced(S.placed[0]);
+    ({left, right} = sideCounts());
+  }
+  const side = (right < CAP.right && (right <= left || left >= CAP.left)) ? 'right' : 'left';
+  const slot = renderCard(c);
+  if (!reduced) slot.classList.add('enter');
+  (side === 'left' ? $('#colLeft') : $('#colRight')).appendChild(slot);
+  const p = {card: c, slot, side, fresh: true, lit: false};
+  S.placed.push(p);
+  setTimeout(() => { p.fresh = false; drawLinks(); }, 900);
+  if (lit) light(p);
+  requestAnimationFrame(drawLinks);
+}
+function removePlaced(p){
+  S.placed = S.placed.filter(x => x !== p);
+  p.slot.classList.add('leave');
+  setTimeout(() => p.slot.remove(), 380);
+}
+function light(p){
+  p.lit = true;
+  p.slot.firstChild.classList.add('lit');
+  clearTimeout(p.litT);
+  p.litT = setTimeout(() => {
+    p.lit = false; p.slot.firstChild.classList.remove('lit'); drawLinks();
+  }, 2800);
+  drawLinks();
+}
+function flushPending(){
+  const list = S.pending; S.pending = [];
+  list.forEach(c => place(c, false));
+}
+function matchCards(text){
+  const t = text.toLowerCase();
+  const hits = S.pending.filter(c => keysOf(c).some(k => k && t.includes(k)));
+  S.pending = S.pending.filter(c => !hits.includes(c));
+  hits.forEach(c => place(c, true));
+  S.placed.forEach(p => {
+    if (!hits.includes(p.card) && keysOf(p.card).some(k => k && t.includes(k))) light(p);
+  });
+}
+
+/* ================= link lines ================= */
+function drawLinks(){
+  const svg = $('#links');
+  const stage = $('#stage').getBoundingClientRect();
+  const cr = $('#core').getBoundingClientRect();
+  if (!stage.width || !cr.width) return;
+  const cx = cr.left + cr.width/2 - stage.left, cy = cr.top + cr.height/2 - stage.top;
+  const R = Math.min(cr.width, cr.height) / 2 * 0.80;
+  svg.setAttribute('viewBox', `0 0 ${stage.width} ${stage.height}`);
+  let out = '';
+  S.placed.forEach(p => {
+    const r = p.slot.getBoundingClientRect();
+    if (!r.width) return;
+    const isLeft = p.side === 'left';
+    const tx = (isLeft ? r.right : r.left) - stage.left;
+    const ty = r.top + Math.min(26, r.height/2) - stage.top;
+    const a = Math.atan2(ty - cy, tx - cx);
+    const sx = cx + Math.cos(a) * R, sy = cy + Math.sin(a) * R;
+    const mx = tx + (isLeft ? 22 : -22);
+    const cls = 'link-path' + (p.fresh && !reduced ? ' fresh' : '') + (p.lit ? ' lit' : '');
+    out += `<path class="${cls}" d="M${sx.toFixed(1)},${sy.toFixed(1)} L${mx.toFixed(1)},${ty.toFixed(1)} L${tx.toFixed(1)},${ty.toFixed(1)}"/>`;
+    out += `<circle class="link-dot" cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="2.5"/>`;
+  });
+  svg.innerHTML = out;
+}
+addEventListener('resize', drawLinks);
+
+/* ================= log, caption, tools ================= */
+function addLog(kind, text){
+  const log = $('#log');
+  const e = el('div', 'entry ' + kind);
+  e.appendChild(el('span', 'who', kind === 'you' ? 'You' : 'Reply'));
+  const t = el('span', 'txt', text);
+  e.appendChild(t);
+  log.appendChild(e);
+  while (log.children.length > 30) log.firstChild.remove();
+  log.scrollTop = log.scrollHeight;
+  return t;
+}
+
+let typeTimer = null, typeFull = '';
+function typeLine(text){
+  const line = $('#line');
+  if (typeTimer){ clearInterval(typeTimer); line.textContent = typeFull; }
+  if (line.textContent) $('#prev').textContent = line.textContent;
+  typeFull = text;
+  if (reduced){ line.textContent = text; return; }
+  let i = 0;
+  line.textContent = '';
+  line.classList.add('typing');
+  typeTimer = setInterval(() => {
+    i += 1;
+    line.textContent = text.slice(0, i);
+    if (i >= text.length){ clearInterval(typeTimer); typeTimer = null; line.classList.remove('typing'); }
+  }, 38);
+}
+
+const pills = {};
+function pill(name){
+  if (!pills[name]){
+    pills[name] = el('span', 'pill', name);
+    $('#pills').appendChild(pills[name]);
+  }
+  return pills[name];
+}
+['markets','pegs','news','notes'].forEach(pill);
+function refreshPills(){
+  Object.entries(pills).forEach(([n, p]) => p.classList.toggle('busy', S.sats.some(s => s.tool === n)));
+}
+
+/* ================= state ================= */
+const LABELS = {idle:'Standing by', listening:'Listening', thinking:'Working', speaking:'Speaking'};
+function setState(v){
+  S.state = v;
+  document.body.dataset.state = v;
+  $('#state-label').textContent = LABELS[v] || v;
+  $('#state-sub').textContent =
+    v === 'thinking' ? (S.sats.length ? `Querying ${S.sats.length} source${S.sats.length>1?'s':''}` : 'Reasoning') :
+    v === 'listening' ? 'Go ahead' :
+    v === 'speaking' ? '' : 'Say the wake word or hold Space';
+  if (v === 'idle' || v === 'listening') flushPending();
+}
+
+/* ================= event handler ================= */
+function handle(ev){
+  switch (ev.type){
+    case 'state': setState(ev.value); break;
+    case 'transcript':
+      if (ev.role !== 'user') break;
+      $('#heard').textContent = 'You: ' + ev.text;
+      if (ev.final){ addLog('you', ev.text); S.reply = null; }
+      break;
+    case 'tool_call':
+      S.sats.push({tool: ev.tool, label: ev.tool + '.' + ev.fn, a: Math.random() * Math.PI * 2, born: performance.now()/1000});
+      pill(ev.tool); refreshPills(); setState(S.state);
+      break;
+    case 'tool_result': {
+      const i = S.sats.findIndex(s => s.tool === ev.tool);
+      if (i >= 0) S.sats.splice(i, 1);
+      refreshPills(); setState(S.state);
+      break;
+    }
+    case 'card': {
+      if (ev.tool){ const i = S.sats.findIndex(s => s.tool === ev.tool); if (i >= 0) S.sats.splice(i, 1); }
+      refreshPills(); setState(S.state);
+      const now = ev.reveal === 'now' || ev.kind === 'alert' || !(S.state === 'thinking' || S.state === 'speaking');
+      if (now) place(ev, ev.kind === 'alert');
+      else S.pending.push(ev);
+      break;
+    }
+    case 'speech':
+      typeLine(ev.text);
+      if (!S.reply) S.reply = addLog('reply', '');
+      S.reply.textContent += (S.reply.textContent ? ' ' : '') + ev.text;
+      requestAnimationFrame(() => { $('#log').scrollTop = $('#log').scrollHeight; });
+      matchCards(ev.text);
+      break;
+    case 'level':
+      S.target = Math.max(0, Math.min(1, Number(ev.value) || 0));
+      S.levelAt = performance.now();
+      break;
+    case 'ticker': setTicker(ev.items || []); break;
+    case 'clear':
+      S.placed.slice().forEach(removePlaced);
+      S.pending = []; S.sats = []; refreshPills();
+      $('#heard').textContent = '';
+      setTimeout(drawLinks, 400);
+      break;
+  }
+}
+
+function setTicker(items){
+  const track = $('#track');
+  track.textContent = '';
+  if (!items.length){ track.appendChild(el('span', null, 'Watchlist feed idle')); return; }
+  for (let rep = 0; rep < 2; rep++){
+    items.forEach(it => {
+      const s = el('span');
+      s.appendChild(el('b', null, it.symbol));
+      s.appendChild(document.createTextNode(fmt(it.price, it.decimals)));
+      const d = Number(it.delta) || 0;
+      s.appendChild(el('em', d > 0 ? 'up' : d < 0 ? 'down' : 'flat', (d > 0 ? '+' : '') + d.toFixed(1) + '%'));
+      track.appendChild(s);
+    });
+  }
+}
+
+/* ================= core canvas ================= */
+const core = $('#core'), ctx = core.getContext('2d');
+let W = 0, H = 0;
+function sizeCore(){
+  const r = core.getBoundingClientRect();
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  W = r.width; H = r.height;
+  core.width = Math.round(W * dpr); core.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+new ResizeObserver(() => { sizeCore(); drawLinks(); }).observe(core);
+
+const TUNE = {
+  idle:      {spin:.05, bright:.5},
+  listening: {spin:.14, bright:.85},
+  thinking:  {spin:.7,  bright:.75},
+  speaking:  {spin:.16, bright:1},
+};
+const ion = a => `rgba(111,231,255,${a})`;
+const amber = a => `rgba(255,181,71,${a})`;
+
+function arcRing(cx, cy, r, rot, segs, lw, color){
+  ctx.lineWidth = lw; ctx.strokeStyle = color;
+  segs.forEach(([a0, a1]) => { ctx.beginPath(); ctx.arc(cx, cy, r, a0 + rot, a1 + rot); ctx.stroke(); });
+}
+function diamond(x, y, s, color){
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.moveTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s); ctx.lineTo(x - s, y); ctx.closePath(); ctx.fill();
+}
+
+let rot = 0, last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const t = now / 1000;
+  const tn = TUNE[S.state] || TUNE.idle;
+
+  if (!S.live){
+    if (S.state === 'speaking') S.target = .35 + .5 * Math.abs(Math.sin(t*7.3) * Math.sin(t*3.1 + 1));
+    else if (S.state === 'listening') S.target = .18 + .14 * Math.abs(Math.sin(t*5.2));
+    else S.target = 0;
+  } else if (now - S.levelAt > 300){
+    S.target = 0;
+  }
+  S.level += (S.target - S.level) * Math.min(1, dt * 10);
+  rot += dt * tn.spin * (reduced ? .3 : 1);
+  draw(t, tn);
+  requestAnimationFrame(frame);
+}
+
+function draw(t, tn){
+  ctx.clearRect(0, 0, W, H);
+  if (!W) return;
+  const cx = W/2, cy = H/2, R = Math.min(W, H) / 2 * 0.80, b = tn.bright;
+  const TAU = Math.PI * 2;
+
+  // guide circles
+  ctx.lineWidth = 1;
+  [1, .74, .58, .36].forEach((k, i) => {
+    ctx.strokeStyle = ion(.08 + .04 * i);
+    ctx.beginPath(); ctx.arc(cx, cy, R * k, 0, TAU); ctx.stroke();
+  });
+
+  // crosshair hairlines
+  ctx.strokeStyle = ion(.10);
+  ctx.beginPath();
+  ctx.moveTo(cx - R*1.08, cy); ctx.lineTo(cx - R*.62, cy);
+  ctx.moveTo(cx + R*.62, cy); ctx.lineTo(cx + R*1.08, cy);
+  ctx.moveTo(cx, cy - R*1.08); ctx.lineTo(cx, cy - R*.62);
+  ctx.moveTo(cx, cy + R*.62); ctx.lineTo(cx, cy + R*1.08);
+  ctx.stroke();
+
+  // tick ring
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot * .25);
+  for (let i = 0; i < 180; i++){
+    const a = i / 180 * TAU, major = i % 15 === 0;
+    const r1 = R * (major ? .925 : .955), r2 = R * .975;
+    ctx.strokeStyle = ion(major ? .65 * b : .22 * b);
+    ctx.lineWidth = major ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a)*r1, Math.sin(a)*r1); ctx.lineTo(Math.cos(a)*r2, Math.sin(a)*r2); ctx.stroke();
+  }
+  ctx.restore();
+
+  // segmented arcs
+  arcRing(cx, cy, R*.86, rot, [[0,.9],[1.2,1.9],[2.3,2.5],[3.0,4.4],[4.8,5.1],[5.5,6.0]], 3, ion(.75*b));
+  arcRing(cx, cy, R*.80, -rot*1.6, [[.4,1.0],[1.5,3.2],[3.6,3.8],[4.2,5.9]], 1.2, ion(.45*b));
+  if (S.state === 'thinking'){
+    arcRing(cx, cy, R*.68, rot*3, [[0,.55],[Math.PI, Math.PI+.55]], 4, amber(.9));
+    arcRing(cx, cy, R*.64, -rot*2, [[1,1.25],[2.6,2.85],[4.2,4.45],[5.6,5.85]], 1.5, amber(.55));
+  }
+
+  // voice waveform ring
+  const r0 = R * .47, amp = R * .13 * S.level;
+  ctx.beginPath();
+  for (let i = 0; i <= 180; i++){
+    const a = i / 180 * TAU;
+    const n = Math.sin(a*6 + t*4)*.5 + Math.sin(a*11 - t*6.3)*.3 + Math.sin(a*3 + t*2.1)*.2;
+    const r = r0 + amp * n + 1.6 * Math.sin(a*42 + t*3) * S.level;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = ion(.9 * b); ctx.lineWidth = 1.6;
+  ctx.shadowColor = ion(.9); ctx.shadowBlur = 14 * b;
+  ctx.stroke(); ctx.shadowBlur = 0;
+
+  // inner glow
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R*.46);
+  g.addColorStop(0, ion(.22*b + .28*S.level));
+  g.addColorStop(.6, ion(.05*b));
+  g.addColorStop(1, ion(0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R*.46, 0, TAU); ctx.fill();
+
+  // pending panels: small squares waiting at the top of the inner ring
+  S.pending.forEach((p, i) => {
+    const a = -Math.PI/2 + (i - (S.pending.length - 1) / 2) * .26;
+    const x = cx + Math.cos(a) * R*.66, y = cy + Math.sin(a) * R*.66;
+    const pulse = .5 + .5 * Math.sin(t*4 + i);
+    ctx.strokeStyle = ion(.45 + .45*pulse); ctx.lineWidth = 1.2;
+    ctx.strokeRect(x - 5, y - 5, 10, 10);
+  });
+
+  // tool satellites orbiting the outer ring
+  ctx.font = '500 12px "Chakra Petch", system-ui, sans-serif';
+  S.sats.forEach(s => {
+    const a = s.a + (t - s.born) * .9;
+    const r = R * .905, x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    diamond(x, y, 6, amber(.95));
+    ctx.fillStyle = amber(.92);
+    const right = Math.cos(a) >= 0;
+    ctx.textAlign = right ? 'left' : 'right';
+    ctx.fillText(s.label, x + (right ? 12 : -12), y + 4);
+  });
+}
+requestAnimationFrame(frame);
+
+/* ================= clock ================= */
+function tickClock(){
+  const d = new Date();
+  $('#clock').textContent = d.toLocaleTimeString('en-US', {hour12:false});
+  $('#date').textContent = d.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric'});
+}
+tickClock(); setInterval(tickClock, 1000);
+
+/* ================= connection ================= */
+function wsURL(){
+  if (params.get('ws')) return params.get('ws');
+  if (location.protocol.startsWith('http')) return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+  return 'ws://localhost:8765/ws';
+}
+let retryT = null;
+function connect(){
+  let ws;
+  try { ws = new WebSocket(wsURL()); } catch (e) { return retry(); }
+  ws.onopen = () => { S.ws = ws; setLive(true); };
+  ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (err) { console.warn('Bad event', err); } };
+  ws.onclose = () => { if (S.ws === ws){ S.ws = null; setLive(false); } retry(); };
+  ws.onerror = () => {};
+}
+function retry(){ clearTimeout(retryT); retryT = setTimeout(connect, 4000); }
+function send(obj){ if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(obj)); }
+function setLive(v){
+  S.live = v;
+  document.body.dataset.live = v ? '1' : '0';
+  $('#linktext').textContent = v ? 'Linked to localhost' : 'Not linked';
+  if (v){ demoAbort(); handle({type:'clear'}); setState('idle'); }
+}
+
+/* ================= input ================= */
+$('#ask').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('#q').value.trim();
+  if (!v) return;
+  $('#q').value = '';
+  if (S.live) send({type:'text', text:v});
+  else runDemo(pickScenario(v), v);
+});
+function pttStart(){
+  $('#mic').classList.add('on');
+  if (S.live) send({type:'ptt', down:true});
+  else { demoAbort(); setState('listening'); }
+}
+function pttEnd(){
+  $('#mic').classList.remove('on');
+  if (S.live) send({type:'ptt', down:false});
+  else runDemo(nextScenario());
+}
+let spaceDown = false;
+addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.repeat || document.activeElement === $('#q')) return;
+  e.preventDefault(); spaceDown = true; pttStart();
+});
+addEventListener('keyup', e => {
+  if (e.code !== 'Space' || !spaceDown) return;
+  spaceDown = false; pttEnd();
+});
+const mic = $('#mic');
+mic.addEventListener('pointerdown', e => { mic.setPointerCapture(e.pointerId); pttStart(); });
+mic.addEventListener('pointerup', pttEnd);
+
+/* ================= demo mode ================= */
+// Everything below is sample data so the screen can be seen without the backend.
+// It is labeled "Demo data" on screen. Live data only comes from server.py.
+function talk(lines){
+  const out = [[250, {type:'state', value:'speaking'}]];
+  let wait = 200;
+  lines.forEach(l => { out.push([wait, {type:'speech', text:l}]); wait = l.length * 58; });
+  out.push([wait, {type:'state', value:'idle'}]);
+  return out;
+}
+function wave(n, base, amp, seed){
+  return Array.from({length:n}, (_, i) => +(base + amp*Math.sin(i/3 + seed) + amp*.45*Math.sin(i*1.7 + seed*2)).toFixed(5));
+}
+const DEMO_SRC = 'Demo data';
+const SCENARIOS = {
+  pegs: {
+    q: 'How are the stablecoin pegs holding up this morning?',
+    steps: [
+      [350, {type:'state', value:'thinking'}],
+      [250, {type:'tool_call', tool:'pegs', fn:'get_peg', args:{stablecoin:'USDC'}}],
+      [200, {type:'tool_call', tool:'pegs', fn:'get_peg', args:{stablecoin:'USDT'}}],
+      [250, {type:'tool_call', tool:'pegs', fn:'get_supply_change', args:{days:7}}],
+      [1100,{type:'card', tool:'pegs', id:'usdc', kind:'metric', title:'USDC peg', keys:['usdc'],
+             value:0.9998, decimals:4, unit:'USD', delta:1.2, delta_label:'supply, 7 days',
+             spark:wave(24, .9998, .00012, 1), source:DEMO_SRC}],
+      [150, {type:'card', tool:'pegs', id:'usdt', kind:'metric', title:'USDT peg', keys:['usdt','tether'],
+             value:1.0001, decimals:4, unit:'USD', delta:0.0, delta_label:'supply, 7 days',
+             spark:wave(24, 1.0001, .00008, 3), source:DEMO_SRC}],
+      [150, {type:'card', tool:'pegs', id:'usdc-24h', kind:'chart', title:'USDC price, last 24 hours', keys:['24 hours','range'],
+             series:wave(48, .9998, .00025, 0), band:[.998, 1.002], decimals:4, source:DEMO_SRC}],
+      ...talk([
+        'All major pegs are normal this morning.',
+        'USDC is at ninety-nine point nine eight cents, with supply up one point two percent this week.',
+        'Tether is at one point zero zero zero one, and its supply is flat.',
+        'Over the last 24 hours, USDC stayed inside a tight range around one dollar.',
+      ]),
+    ],
+  },
+  watchlist: {
+    q: 'What moved on my watchlist?',
+    steps: [
+      [350, {type:'state', value:'thinking'}],
+      [250, {type:'tool_call', tool:'markets', fn:'get_watchlist_snapshot', args:{}}],
+      [250, {type:'tool_call', tool:'news', fn:'get_headlines', args:{topic:'watchlist', hours:12}}],
+      [1000,{type:'ticker', items:[
+              {symbol:'BTC', price:108240, decimals:0, delta:0.8}, {symbol:'ETH', price:4012, decimals:0, delta:-0.6},
+              {symbol:'SOL', price:211.4, delta:3.3}, {symbol:'HYPE', price:48.92, delta:6.4},
+              {symbol:'COIN', price:342.1, delta:-3.1}, {symbol:'US10Y', price:4.21, delta:0.2}]}],
+      [100, {type:'card', tool:'markets', id:'movers', kind:'metrics', title:'Watchlist movers', keys:['watchlist'],
+             rows:[{label:'HYPE', value:48.92, delta:6.4}, {label:'SOL', value:211.4, delta:3.3},
+                   {label:'COIN', value:342.1, delta:-3.1}, {label:'BTC', value:108240, decimals:0, delta:0.8},
+                   {label:'ETH', value:4012, decimals:0, delta:-0.6}], source:DEMO_SRC}],
+      [120, {type:'card', tool:'news', id:'heads', kind:'headlines', title:'Headlines on your theses', keys:['headlines'],
+             items:[{title:'Sample headline: tokenized treasury funds add new issuers', source:'Demo feed', age:'2h'},
+                    {title:'Sample headline: lawmakers schedule stablecoin rule hearing', source:'Demo feed', age:'5h'}],
+             source:DEMO_SRC}],
+      ...talk([
+        'Three names on your watchlist moved more than three percent.',
+        'HYPE is up six point four percent, SOL is up three point three, and COIN is down three point one.',
+        'Bitcoin and Ether were quieter.',
+        'Two headlines touch your theses: one on tokenized treasuries, one on stablecoin rules.',
+      ]),
+    ],
+  },
+  note: {
+    q: 'Note that I think tokenized treasuries hit twenty billion by year end.',
+    steps: [
+      [350, {type:'state', value:'thinking'}],
+      [250, {type:'tool_call', tool:'notes', fn:'append_note', args:{file:'theses.md'}}],
+      [700, {type:'card', tool:'notes', id:'note', kind:'note', title:'Saved to theses', keys:['saved'],
+             text:'Tokenized treasuries reach $20B by year end.', source:'notes/theses.md'}],
+      ...talk(['Saved to your theses.']),
+    ],
+  },
+};
+const ORDER = ['pegs', 'watchlist', 'note'];
+let orderIdx = 0;
+function nextScenario(){ const s = SCENARIOS[ORDER[orderIdx % ORDER.length]]; orderIdx++; return s; }
+function pickScenario(text){
+  const t = text.toLowerCase();
+  if (/peg|stable|usdc|usdt|tether/.test(t)) return SCENARIOS.pegs;
+  if (/watch|move|market|price|news|headline/.test(t)) return SCENARIOS.watchlist;
+  if (/note|save|remember|thesis/.test(t)) return SCENARIOS.note;
+  return nextScenario();
+}
+let demoToken = 0;
+function demoAbort(){ demoToken++; }
+async function runDemo(sc, asked){
+  const my = ++demoToken;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  handle({type:'clear'});
+  const q = asked || sc.q;
+  setState('listening');
+  if (!asked){
+    const words = q.split(' ');
+    for (let i = 1; i <= words.length; i++){
+      if (my !== demoToken) return;
+      handle({type:'transcript', role:'user', text:words.slice(0, i).join(' '), final:false});
+      await sleep(120);
+    }
+  }
+  handle({type:'transcript', role:'user', text:q, final:true});
+  for (const [ms, ev] of sc.steps){
+    await sleep(ms);
+    if (my !== demoToken) return;
+    handle(ev);
+  }
+}
+
+/* ================= start ================= */
+setState('idle');
+$('#linktext').textContent = 'Not linked';
+if (!params.has('demo')) connect();
+setTimeout(() => {
+  if (!S.live && !S.demoStarted){ S.demoStarted = true; runDemo(SCENARIOS.pegs); }
+}, 1600);
+})();
+</script>
+</body>
+</html>

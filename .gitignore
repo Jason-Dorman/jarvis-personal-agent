@@ -1,0 +1,20 @@
+# secrets
+.env
+
+# runtime data (spec 6.8)
+jarvis.db
+jarvis.db-*
+logs/
+briefs/
+
+# downloaded models (Piper voices, whisper, wake word)
+models/
+*.onnx
+*.onnx.json
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,29 @@
+wake_word:
+  model: hey_jarvis
+  sensitivity: 0.5
+followup_window_seconds: 8
+push_to_talk_hotkey: "ctrl+space"   # v1 uses the HUD's hold-Space; global hook comes later
+
+stt:
+  model: small.en
+  vocab: [USDC, USDT, perps, RWA, Hyperliquid, basis, T-bills, stablecoin]
+
+brain:
+  default_model: sonnet
+  deep_model: opus
+  max_spoken_sentences: 3
+
+tts:
+  voice: en_US-ryan-medium
+
+brief:
+  move_threshold_pct: 3     # watchlist moves smaller than this are skipped
+
+watchlist_file: notes/watchlist.md
+theses_file: notes/theses.md
+news_feeds:
+  - https://www.coindesk.com/arc/outboundfeeds/rss/
+  - https://www.theblock.co/rss.xml
+  - https://www.federalreserve.gov/feeds/press_all.xml
+
+debug: false                # true lets audio touch disk for troubleshooting
