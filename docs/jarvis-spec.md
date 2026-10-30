@@ -8,7 +8,7 @@ A personal finance and fintech assistant. It runs on your machine. You talk to i
 
 Jarvis is a voice assistant for markets, crypto, and fintech.
 
-You say "Hey Jarvis." You ask a question. It checks real data with its tools. It answers out loud in a few sentences.
+You say "Hey Jarvis." You ask a question. It checks real data with its tools. It answers out loud in up to five short sentences: the answer first, then the context that makes it useful.
 
 Ask for your morning brief and it gives you a short spoken rundown of markets, pegs, news, and your theses. It never runs on its own.
 
@@ -34,6 +34,12 @@ Ask for your morning brief and it gives you a short spoken rundown of markets, p
 > You: "Hey Jarvis, how's USDC holding up?"
 > Jarvis: "USDC is at 99.98 cents. Supply is up 1.2% this week. No peg stress."
 
+**Say good morning**
+> You: "Hey Jarvis, good morning."
+> Jarvis: "Good morning, Mr. Dorman."
+
+A bare greeting (good morning, afternoon, or evening) is answered instantly, without calling Claude, using the same greeting you said. A greeting with a question ("good morning, what's bitcoin at?") goes to Claude, which opens with the greeting and then answers. The name comes from `address_as` in `config.yaml`.
+
 **Follow up without the wake word**
 > You: "And Tether?"
 > Jarvis: "USDT is at 1.0001. Supply is flat."
@@ -41,7 +47,7 @@ Ask for your morning brief and it gives you a short spoken rundown of markets, p
 For 8 seconds after Jarvis finishes, it keeps listening. You can follow up without saying "Hey Jarvis" again.
 
 **Interrupt it**
-Start talking while Jarvis is speaking. It stops and listens.
+Say "Hey Jarvis" (or press push-to-talk) while Jarvis is speaking or working. It stops mid-word and listens. With headphones you can turn on plain barge-in (`barge_in: voice`): just start talking over it.
 
 **Get the morning brief**
 > You: "Hey Jarvis, give me my morning brief."
@@ -54,7 +60,7 @@ The brief only runs when you ask for it. There is no schedule. You can also type
 > Jarvis: "Saved to your theses."
 
 **Push-to-talk backup**
-Hold a hotkey to talk. Use it when the room is noisy or the wake word misfires.
+Hold Ctrl+Alt+Space anywhere (or Space in the HUD) to talk. Use it when the room is noisy or the wake word misfires.
 
 ---
 
@@ -97,6 +103,7 @@ All audio stays local. Only the transcribed text goes to Claude.
 - Runs all the time while Jarvis is idle. About 2 ms per 80 ms of audio.
 - Tune `wake_word.sensitivity` in `config.yaml` (0 to 1, higher wakes more easily). The detection threshold is `1 - sensitivity`.
 - A short rising chime plays when it wakes, and when you press push-to-talk.
+- The moment it wakes (or push-to-talk is pressed), Jarvis refreshes the stablecoin list and the watchlist quotes in the background, so the tool calls that follow are usually cache hits.
 
 ### 6.2 Voice detection
 - **Tool:** Silero VAD (the v6 ONNX model that ships with faster-whisper, so no PyTorch).
@@ -109,6 +116,7 @@ All audio stays local. Only the transcribed text goes to Claude.
 - Model: `small.en` to start. Move up to `medium.en` if accuracy is weak.
 - Runs on the GPU (CUDA) when it can and falls back to CPU (`stt.device: auto`). On the GPU, partial transcripts go to the HUD about every 0.8 s while you talk.
 - Add a custom vocabulary list so it hears finance words right: USDC, USDT, perps, RWA, Hyperliquid, basis, T-bills, etc. The list is passed to whisper as its starting prompt.
+- Quiet speech is brought up to a steady level (peak about −6 dBFS, at most 20× gain) before whisper hears it. The laptop mic records speech around −30 dBFS.
 - A leading wake phrase ("Hey Jarvis, ...") is dropped from the transcript. So are whisper's usual silence hallucinations ("you", "thank you", "thanks for watching"). If nothing is left, Jarvis says nothing and goes back to waiting.
 
 ### 6.4 Brain
@@ -119,8 +127,9 @@ All audio stays local. Only the transcribed text goes to Claude.
 - Reads `watchlist.md` and `theses.md` into the system prompt at session start, along with today's date.
 - Streams reply text as it's generated. Each turn is logged to `conversation`.
 - **Voice rules in the system prompt:**
-  - Answer in 1–3 short sentences unless asked for more.
-  - Lead with the answer.
+  - Lead with the answer, then add useful context: the trend, how it compares, what's driving it, what to watch. Up to `brain.max_spoken_sentences` (5) sentences, counting everything said. Most answers need three or four.
+  - Context comes from tool results too. No guessing at causes the data doesn't show.
+  - The question came from speech-to-text. If a word looks misheard but the meaning is clear, answer that and name the guess in a few words ("For USDC:"). Otherwise ask in one short sentence.
   - Say numbers the way people speak them ("ninety-nine point nine eight cents").
   - No lists, tables, or markdown in spoken answers.
   - Every number must come from a tool call. If no tool has it, say so.
@@ -130,18 +139,24 @@ All audio stays local. Only the transcribed text goes to Claude.
 - Speak sentence by sentence as the answer streams in. Don't wait for the full reply. The next sentence is synthesized while the current one plays.
 - Pick one voice and keep it.
 - **Spoken cleanup.** The prompt asks for spoken numbers. A cleanup pass (`speakable()`) fixes what slips through before Piper sees it: tickers are spelled out letter by letter (Piper says "USDC" as "Husk"), except ones people say as words (HYPE, COIN, SOL). It also handles `$1.2B` → "1.2 billion dollars", `$0.9998` → "99.98 cents", signed percents, `24h`, `bps`, and stray markdown or links. Only the audio gets this text. Captions show the sentence as written.
-- **"Checking."** If a tool call has run for 0.8 seconds and nothing has been said yet, Jarvis says "Checking." once, then goes back to working.
+- **"Checking."** When the first tool call of a turn starts and nothing has been said yet, Jarvis says "Checking." once, then goes back to working. A data question needs a second round trip to Claude after the tool call (about 1.5 s), and this covers it. Questions that need no tool stay quiet until the answer.
 
 ### 6.5a Turn taking
 - One question is answered at a time. Voice, push-to-talk, and typed questions (HUD or terminal) all feed the same queue.
-- A question typed while Jarvis is busy waits its turn. Push-to-talk presses made while Jarvis is busy are dropped. Interrupting is barge-in (6.6).
+- A question typed while Jarvis is busy waits its turn. Push-to-talk pressed while Jarvis is busy interrupts it (barge-in, 6.6).
 - Typing or pressing push-to-talk while Jarvis is listening takes over from the voice capture.
 - Voice mode quits on `quit` (typed) or when the terminal's input closes.
 
 ### 6.6 Barge-in
-- While Jarvis speaks, VAD keeps listening.
-- If you talk, stop playback right away and start a new turn.
-- Use echo cancellation (or headphones) so Jarvis doesn't hear itself.
+- While Jarvis works or speaks, the ears keep listening. Playback stops within one 50 ms block, the reply in flight is cancelled, and the next question starts.
+- **What interrupts it** (`barge_in` in config):
+  - `wake_word` (default): say "Hey Jarvis". Works on laptop speakers, since Jarvis rarely says its own name. After the wake word, the next 0.15 s of mic audio is dropped (it's mostly Jarvis's own voice), then the chime plays and it listens as usual.
+  - `voice`: any steady speech (0.32 s) while Jarvis is talking interrupts it, and the wake word still works. **Needs headphones.** On speakers Jarvis hears itself and keeps interrupting. As a safety net, if what it heard after a voice barge-in is mostly its own last words (60% of 3+ content words), Jarvis drops it, switches to `wake_word` until restart, and says so in the terminal.
+  - `off`: nothing interrupts, not even push-to-talk. Presses made mid-answer are dropped.
+  - In `wake_word` and `voice` modes, push-to-talk (hotkey or HUD) interrupts too.
+- There's no software echo canceller. Windows has no PulseAudio `module-echo-cancel`, and the wake word works on speakers without one.
+- After a barge-in, the Agent SDK is told to stop and the cut-off reply is drained in the background. The next question waits for that. Late tool events from the cut-off reply are logged but kept off the screen. If the old reply won't wind down in 5 s, Jarvis starts a fresh session, which loses the conversation so far.
+- The cut-off reply is logged to `conversation` with `[interrupted]`, and its timing row has `interrupted = 1`.
 
 ### 6.7 Morning brief trigger
 - **On demand only.** No cron, no launchd, no timer.
@@ -150,7 +165,7 @@ All audio stays local. Only the transcribed text goes to Claude.
 - For testing without audio: `python -m jarvis.brief` prints the brief text and saves it.
 
 ### 6.8 Memory
-- **SQLite (`jarvis.db`):** price snapshots, tool call log, conversation log.
+- **SQLite (`jarvis.db`):** price snapshots, tool call log, conversation log, and per-turn timings (`turn_timings`, section 10).
 - **`notes/` folder (markdown):** your watchlist, theses, and saved thoughts. You can edit these by hand.
 - Jarvis reads `watchlist.md` and `theses.md` at the start of each session.
 
@@ -183,13 +198,15 @@ Tool details:
 
 ## 8. The morning brief
 
-Runs only when you ask (see 6.7). Spoken in this order. Target 60–90 seconds. The brief is the one answer allowed to run past the 1–3 sentence rule.
+Runs only when you ask (see 6.7). Spoken in this order. Target 60–90 seconds. The brief is the one answer allowed to run past the five-sentence limit.
 
 1. One-line market mood.
 2. Your watchlist: anything that moved more than your threshold.
 3. Stablecoin pegs: any stress, or "all pegs normal."
 4. Top 3 fintech or digital-asset headlines.
 5. Anything that touches one of your theses.
+
+On a busy news day the brief can run to about two minutes (around 300 words).
 
 The full text is saved to `briefs/YYYY-MM-DD.md`. Asking again on the same day replaces that file. A reply counts as a brief when `brief.get_brief_data` was called during that turn. Each part of the brief data fails on its own, so one dead source leaves a gap, not a failed brief.
 
@@ -215,7 +232,29 @@ The full text is saved to `briefs/YYYY-MM-DD.md`. Asking again on the same day r
 | Wake word false triggers | under 1 per hour of normal room noise |
 | Speech-to-text accuracy on finance words | 95%+ on your vocab list |
 
-If a tool call will take long, Jarvis says "Checking" first so the silence isn't dead.
+Jarvis says "Checking." when its first tool call starts, so the silence isn't dead (6.5). It counts as the first spoken word.
+
+**Measuring.** Every turn records its timing (wake → chime, stopped talking → endpointed, speech-to-text, question → first text from Claude, tool time, first word, answer start, total) to the log and to the `turn_timings` table.
+
+```bash
+uv run python -m jarvis.checks timings            # medians and p90 per step, vs these targets
+uv run python -m jarvis.checks vocab              # read finance phrases aloud; scores vocab hits
+uv run python -m jarvis.checks vocab --piper      # Jarvis's own voice reads them (self-test)
+uv run python -m jarvis.checks wake --minutes 60  # false wakes per hour, at several thresholds
+```
+
+**Where v1 stands (2026-10-30, laptop speakers and mic, Piper's voice as the speaker).** Details and reasons are in DECISIONS.md.
+
+| Step | Measured | Target |
+|---|---|---|
+| Stopped talking → first word ("Checking.") | median 2.97 s | 2.5 s: missed |
+| Stopped talking → answer starts | median 4.8 s | 5 s with tools: met |
+| Wake word → chime (in process) | ~0 ms, plus 0.5–0.9 s for openWakeWord to fire after the phrase | 0.3 s: missed, by detection delay |
+| Vocab words heard (Piper through speakers) | 85% | 95%: not shown yet, needs a run with a real voice |
+| Five voice questions in a row | all answered, every number matched the tools, 2 of 5 misheard | v1 done test: passes with Piper's voice, PO's own voice pending |
+| False wakes | 0 in 23 min quiet + 4.2 min of speech (top score 0.01 vs 0.5) | under 1 per hour: on track |
+
+The brain is most of the gap. A data question needs two round trips to Claude (pick the tool, then answer), about 1.3 to 1.6 s each. After a tool result the API sends the reply text in one burst, not streamed, so speech can't start early.
 
 ---
 
@@ -226,7 +265,9 @@ wake_word:
   model: hey_jarvis
   sensitivity: 0.5
 followup_window_seconds: 8
-push_to_talk_hotkey: "ctrl+space"   # not wired yet: the HUD's hold-Space is push-to-talk
+push_to_talk_hotkey: "ctrl+alt+space"   # hold anywhere (Windows); null = off
+barge_in: wake_word         # wake_word | voice (headphones) | off
+address_as: "Mr. Dorman"    # "Good morning, Mr. Dorman." null = no name
 
 audio:
   input_device: null        # null = Windows default; or part of a device name
@@ -245,7 +286,7 @@ brain:
   default_model: sonnet      # sonnet → claude-sonnet-5-5
   deep_model: opus           # opus → claude-opus-5-5
   effort: medium             # low | medium | high | xhigh | max
-  max_spoken_sentences: 3
+  max_spoken_sentences: 5
 
 tts:
   voice: en_US-ryan-medium
@@ -262,6 +303,8 @@ news_feeds:
 
 debug: false                # true lets audio touch disk for troubleshooting
 ```
+
+`push_to_talk_hotkey` is modifiers plus one key, joined with `+`: `ctrl`, `alt`, `shift`, `win`, then a letter, digit, `f1`–`f24`, `space`, `enter`, `tab`, `insert`, or `pause`. It uses Windows' RegisterHotKey, which only reports that one combo (no keyboard hook), and other apps don't get the combo while Jarvis runs. If another app already has it, Jarvis says so at startup and push-to-talk stays HUD-only. Default is Ctrl+Alt+Space, because Ctrl+Space is autocomplete in VS Code.
 
 Unknown keys and out-of-range values are rejected at startup. So is an audio device name that matches no device (the error lists the devices it found). Relative file paths resolve against the folder `config.yaml` is in. Model names `sonnet`, `opus`, and `haiku` map to exact model IDs in `jarvis/config.py`. Any other value is passed through as a model ID.
 
@@ -283,7 +326,10 @@ jarvis/
 │   ├── audio.py            # audio devices (WASAPI on Windows)
 │   ├── models.py           # model downloads into models/; `python -m jarvis.models`
 │   ├── voice_in.py         # mic, wake word, VAD, speech-to-text
-│   ├── voice_out.py        # Piper, sentence pipeline, chime (barge-in in Chunk 3)
+│   ├── voice_out.py        # Piper, sentence pipeline, chime, stop() for barge-in
+│   ├── hotkey.py           # global push-to-talk hotkey (Windows RegisterHotKey)
+│   ├── timing.py           # per-turn timing marks → log + turn_timings (spec 10)
+│   ├── checks.py           # `python -m jarvis.checks timings|vocab|wake`
 │   ├── agent.py            # Claude + tool wiring + voice rules
 │   ├── hooks.py            # pre/post tool hooks: HUD events, tool log, panel hints
 │   ├── cards.py            # HUD panels built from tool results

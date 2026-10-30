@@ -1,4 +1,3 @@
-import asyncio
 import json
 
 import pytest
@@ -123,19 +122,3 @@ async def test_no_hud_means_no_hint():
     hooks = ToolHooks(None, None)
     data = {"tool_name": "mcp__pegs__get_peg", "tool_input": {}, "tool_response": _text(PEG)}
     assert await hooks.post(data, "t", None) == {}
-
-
-@pytest.mark.asyncio
-async def test_running_for_tracks_calls_in_flight():
-    hooks = ToolHooks(None, None)
-    hooks.start_turn()
-    assert hooks.running_for() == 0.0
-    base = {"tool_name": "mcp__pegs__get_peg", "tool_input": {}, "tool_use_id": "t1"}
-    await hooks.pre(base, "t1", None)
-    await asyncio.sleep(0.05)  # Windows' monotonic clock ticks every ~16 ms
-    assert hooks.running_for() > 0.0
-    await hooks.post({**base, "tool_response": _text(PEG)}, "t1", None)
-    assert hooks.running_for() == 0.0
-    await hooks.pre({**base, "tool_use_id": "t2"}, "t2", None)
-    await hooks.failure({**base, "tool_use_id": "t2", "error": "boom"}, "t2", None)
-    assert hooks.running_for() == 0.0

@@ -47,6 +47,7 @@ uv run python -m jarvis.main --text      # typed REPL + HUD, no audio
 uv run python -m jarvis.models           # download Piper / wake word / whisper models
 uv run python -m jarvis.brief            # print and save a morning brief
 uv run python hud/server.py --demo       # HUD only, test turns
+uv run python -m jarvis.checks timings   # per-turn timing vs spec 10 (also: vocab, wake)
 ```
 
 HUD: http://localhost:8765
@@ -55,7 +56,9 @@ HUD: http://localhost:8765
 
 - Native Windows 11 (moved off WSL2). Shell is PowerShell; the `uv` commands above work as-is. Audio goes through Windows directly (`sounddevice` on WASAPI), no PulseAudio.
 - GPU: GTX 1660 Ti (6 GB), usable for faster-whisper via CUDA.
-- Push-to-talk goes through the HUD's hold-Space for v1. A real global hotkey is possible now that we're native (see DECISIONS.md).
+- Push-to-talk: HUD hold-Space, or the global Ctrl+Alt+Space hotkey (`jarvis/hotkey.py`, Windows RegisterHotKey).
+- Barge-in defaults to the wake word, because these are laptop speakers. Plain-voice barge-in (`barge_in: voice`) needs headphones.
+- Bash heredocs here turn `\\` into `\`. For Python edits that contain backslashes, write a script file or use the Edit tool.
 
 ## Code conventions
 

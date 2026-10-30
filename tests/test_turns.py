@@ -35,23 +35,21 @@ class FakeVoice:
 
 
 class FakeBrain:
-    """Streams `deltas`. With `tool_seconds`, a tool runs that long before the text."""
+    """Streams `deltas`. With `tool_seconds`, a tool call (and the second round trip to
+    Claude) takes that long before the text."""
 
     def __init__(self, deltas, tool_seconds=0.0) -> None:
         self.deltas = deltas
         self.tool_seconds = tool_seconds
-        self._tool_started: float | None = None
+        self._looked_up = False
 
-    def tool_running_for(self) -> float:
-        if self._tool_started is None:
-            return 0.0
-        return asyncio.get_running_loop().time() - self._tool_started
+    def looking_up(self) -> bool:
+        return self._looked_up
 
     async def ask(self, text):
         if self.tool_seconds:
-            self._tool_started = asyncio.get_running_loop().time()
+            self._looked_up = True
             await asyncio.sleep(self.tool_seconds)
-            self._tool_started = None
         for d in self.deltas:
             yield d
 
@@ -85,17 +83,16 @@ async def test_sentences_go_to_the_voice():
 
 
 @pytest.mark.asyncio
-async def test_filler_when_a_tool_runs_long():
+async def test_filler_as_soon_as_a_tool_starts():
     hud, voice = FakeHud(), FakeVoice()
-    brain = FakeBrain(REPLY, tool_seconds=1.2)
+    brain = FakeBrain(REPLY, tool_seconds=0.3)
     await TurnRunner(brain, hud, voice, out=io.StringIO(), filler=FILLER).run("q")
     assert voice.said[0] == FILLER
     assert voice.said[1:] == ["USDC is at ninety-nine point nine eight cents.", "Supply is flat."]
 
 
 @pytest.mark.asyncio
-async def test_no_filler_for_a_quick_tool():
+async def test_no_filler_when_no_tool_is_used():
     voice = FakeVoice()
-    brain = FakeBrain(REPLY, tool_seconds=0.2)
-    await TurnRunner(brain, FakeHud(), voice, out=io.StringIO(), filler=FILLER).run("q")
+    await TurnRunner(FakeBrain(REPLY), FakeHud(), voice, out=io.StringIO(), filler=FILLER).run("q")
     assert FILLER not in voice.said

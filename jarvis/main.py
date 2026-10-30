@@ -26,6 +26,7 @@ from jarvis.agent import Brain
 from jarvis.cards import ticker_items
 from jarvis.conversation import Inputs, VoiceLoop, text_loop
 from jarvis.runtime import Runtime
+from jarvis.timing import TimingHud, TurnClock
 from jarvis.turns import FILLER, TurnRunner
 from tools.services import Services
 
@@ -69,9 +70,11 @@ async def text_mode(
     rt: Runtime, inputs: Inputs, stack: contextlib.AsyncExitStack
 ) -> Coroutine[Any, Any, None]:
     print("Jarvis (text mode).")
-    brain = await _start_brain(rt, stack)
+    clock = TurnClock(rt.memory)
+    screen = TimingHud(hud, clock)
+    brain = await _start_brain(rt, stack, screen)
     print("Ready. Type a question, or 'quit'.")
-    return text_loop(inputs, TurnRunner(brain, hud))
+    return text_loop(inputs, TurnRunner(brain, screen, clock=clock))
 
 
 async def voice_mode(
@@ -85,36 +88,71 @@ async def voice_mode(
     from jarvis.voice_out import Speaker
 
     cfg = rt.cfg
+    clock = TurnClock(rt.memory)
+    screen = TimingHud(hud, clock, FILLER)
     print("Jarvis (voice mode). Loading speech models...", flush=True)
-    speaker = Speaker.load(str(models.piper_voice(cfg.tts.voice)), hud, cfg.audio.output_device)
+    speaker = Speaker.load(str(models.piper_voice(cfg.tts.voice)), screen, cfg.audio.output_device)
     wake = WakeWord(models.wake_files(cfg.wake_word.model), cfg.wake_word.sensitivity)
     stt = Transcriber.load(cfg.stt)
     mic_device = audio.find_device("input", cfg.audio.input_device)
     print(f"  Speech-to-text: whisper {cfg.stt.model} on {stt.device.upper()}")
     print(f"  Mic: {audio.device_name(mic_device, 'input')}")
     print(f"  Speakers: {audio.device_name(speaker.device, 'output')}")
+    print(f"  Interrupt: {BARGE_IN_HELP[cfg.barge_in]}")
+    hotkey = _start_hotkey(cfg.push_to_talk_hotkey, inputs, stack)
 
-    brain = await _start_brain(rt, stack)
+    brain = await _start_brain(rt, stack, screen)
     await stack.enter_async_context(speaker)
     mic = await stack.enter_async_context(Mic(mic_device))
     ears = Ears(mic, StreamingVad(), wake, stt, LOGS_DIR / "audio" if cfg.debug else None)
-    runner = TurnRunner(brain, hud, speaker, filler=FILLER)
-    print('Ready. Say "Hey Jarvis", hold Space in the HUD, or type. "quit" to stop.')
+    runner = TurnRunner(brain, screen, speaker, filler=FILLER, clock=clock)
+    talk = f"hold {hotkey} or Space in the HUD" if hotkey else "hold Space in the HUD"
+    print(f'Ready. Say "Hey Jarvis", {talk}, or type. "quit" to stop.')
     return VoiceLoop(
         ears,
         speaker,
         runner,
-        hud,
+        screen,
         inputs,
         silence=cfg.vad.silence_seconds,
         vad_threshold=cfg.vad.threshold,
         followup_seconds=cfg.followup_window_seconds,
+        barge_in=cfg.barge_in,
+        clock=clock,
+        on_wake=rt.services.warm_up,
     ).run()
 
 
-async def _start_brain(rt: Runtime, stack: contextlib.AsyncExitStack) -> Brain:
+BARGE_IN_HELP = {
+    "wake_word": 'say "Hey Jarvis" or push-to-talk while it talks',
+    "voice": 'just talk over it (use headphones), or say "Hey Jarvis"',
+    "off": "off (barge_in: off)",
+}
+
+
+def _start_hotkey(
+    combo: str | None, inputs: Inputs, stack: contextlib.AsyncExitStack
+) -> str | None:
+    """The global push-to-talk hotkey (Windows). Returns its name, or None if it's off."""
+    from jarvis.hotkey import Hotkey
+
+    if not combo or not Hotkey.supported():
+        return None
+    loop = asyncio.get_running_loop()
+    key = Hotkey(combo, lambda down: loop.call_soon_threadsafe(inputs.put, "ptt", down))
+    try:
+        key.start()
+    except RuntimeError as e:
+        print(f"  Hotkey: {e}. Push-to-talk is HUD-only (change push_to_talk_hotkey).")
+        return None
+    stack.callback(key.stop)
+    print(f"  Hotkey: hold {combo} anywhere to talk")
+    return combo
+
+
+async def _start_brain(rt: Runtime, stack: contextlib.AsyncExitStack, screen: Any) -> Brain:
     print("Starting the brain...", flush=True)
-    return await stack.enter_async_context(Brain(rt.cfg, rt.memory, rt.services, hud=hud))
+    return await stack.enter_async_context(Brain(rt.cfg, rt.memory, rt.services, hud=screen))
 
 
 async def _until_done(loop: Coroutine[Any, Any, None], server: uvicorn.Server) -> None:

@@ -156,6 +156,10 @@ class PegData:
         self._cache.put("assets", assets)
         return assets
 
+    async def warm(self) -> None:
+        """Fetch the stablecoin list now, so the next peg question doesn't wait for it."""
+        await self._assets()
+
     async def get_peg(self, stablecoin: str) -> dict[str, Any]:
         asset = find_asset(await self._assets(), stablecoin)
         if not asset:

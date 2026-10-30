@@ -56,7 +56,7 @@ The ticker is pushed at startup and every 5 minutes (`jarvis/main.py`). The serv
 
 **2. While listening (done: `jarvis/conversation.py`)**
 
-The voice loop sets `listening` when the wake word fires, when push-to-talk is held, and during the 8 s follow-up window. On the GPU, partial transcripts arrive about every 0.8 s while you talk. The final one goes out when the turn starts, after a `clear`.
+The voice loop sets `listening` when the wake word fires, when push-to-talk is held (HUD Space or the Ctrl+Alt+Space hotkey), during the 8 s follow-up window, and right after a barge-in cuts an answer off. On the GPU, partial transcripts arrive about every 0.8 s while you talk. The final one goes out when the turn starts, after a `clear`.
 
 ```python
 await hud.state("listening")

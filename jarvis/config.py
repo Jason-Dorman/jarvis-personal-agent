@@ -65,7 +65,7 @@ class Brain(_Section):
     default_model: str = "sonnet"
     deep_model: str = "opus"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
-    max_spoken_sentences: int = Field(3, ge=1)
+    max_spoken_sentences: int = Field(5, ge=1)
 
 
 class Tts(_Section):
@@ -79,7 +79,10 @@ class Brief(_Section):
 class Config(_Section):
     wake_word: WakeWord = WakeWord()
     followup_window_seconds: float = Field(8, ge=0)
-    push_to_talk_hotkey: str | None = None
+    push_to_talk_hotkey: str | None = "ctrl+alt+space"  # None turns the global hotkey off
+    # How to interrupt Jarvis while it talks (spec 6.6). "wake_word": say "Hey Jarvis"
+    # (works on speakers). "voice": any speech, plus the wake word (needs headphones).
+    barge_in: Literal["wake_word", "voice", "off"] = "wake_word"
     audio: Audio = Audio()
     vad: Vad = Vad()
     stt: Stt = Stt()
@@ -89,6 +92,7 @@ class Config(_Section):
     watchlist_file: Path = Path("notes/watchlist.md")
     theses_file: Path = Path("notes/theses.md")
     news_feeds: list[str] = []
+    address_as: str | None = None  # how Jarvis greets you, e.g. "Mr. Dorman"
     debug: bool = False
 
 

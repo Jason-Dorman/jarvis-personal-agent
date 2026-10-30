@@ -6,6 +6,7 @@ MCP tools are allowed. Anything else is denied without asking (`dontAsk`).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator
@@ -34,6 +35,7 @@ log = logging.getLogger("jarvis.agent")
 
 MAX_AGENT_TURNS = 12
 SORRY = "Sorry, something went wrong on my end. Try that again."
+INTERRUPT_SECONDS = 5.0  # barge-in: how long to wait for the cut-off reply to wind down
 
 _DEEP = re.compile(r"\b(think hard|deep dive)\b", re.IGNORECASE)
 
@@ -43,13 +45,38 @@ def wants_deep(text: str) -> bool:
     return bool(_DEEP.search(text))
 
 
+_GREETING = re.compile(
+    r"^\W*(?:(?:hey|hi|hello|ok|okay)\W+)?(?:jarvis\W+)?(?:good\W+)?"
+    r"(morning|afternoon|evening)(?:\W+jarvis)?\W*$",
+    re.IGNORECASE,
+)
+
+
+def greeting_reply(text: str, address_as: str | None) -> str | None:
+    """A bare greeting ("good morning") gets a greeting straight back, without Claude.
+    It mirrors the one you used. Anything more than a greeting returns None."""
+    m = _GREETING.match(text)
+    if not m:
+        return None
+    hello = f"Good {m.group(1).lower()}"
+    return f"{hello}, {address_as}." if address_as else f"{hello}."
+
+
 SYSTEM_PROMPT = """\
 You are Jarvis, a voice assistant for markets, crypto, and fintech. Your replies are spoken \
 out loud and shown as captions, so write the way a person talks.
 
 How to answer
-- Use {max_sentences} short sentences at most, and one or two is usually best, unless the \
-user asks for more. Lead with the answer. Give the key numbers, not every number.
+- Lead with the answer in the first sentence. Then add the context that makes it useful: \
+the trend, how it compares, what's driving it, or what to watch. Hard limit: \
+{max_sentences} sentences, counting everything you say. Most answers need three or four. \
+Only the morning brief, or the user asking for more, goes past it. A confirmation or a \
+simple yes or no can be one sentence. Give the key numbers, not every number.
+- The question comes from speech-to-text, so a word may be misheard ("us" for USDC). If \
+you can tell what was meant, answer that and name your guess in a few words, like "For \
+USDC:". If you can't tell, ask in one short sentence.
+- Context comes from tool results too, like a headline, the supply trend, or a longer move. \
+Don't guess at causes the data doesn't show.
 - Say numbers the way people speak them: "ninety-nine point nine eight cents", "about \
 seventy-seven thousand dollars", "down four point six percent". Round for the ear.
 - Plain sentences only. No lists, tables, markdown, emoji, or bare symbols.
@@ -82,8 +109,12 @@ brief.get_brief_data once, then speak the brief in this order:
 3. Stablecoin pegs: any stress, or "all pegs normal".
 4. The top three fintech or digital-asset headlines.
 5. Anything in the data that touches one of the user's theses.
-Aim for 60 to 90 seconds spoken, about 150 to 220 words, in short spoken paragraphs. The \
-brief is the only answer allowed past the sentence limit. Skip quiet sections in one line.
+Aim for 60 to 90 seconds spoken, about 150 to 220 words, in short spoken paragraphs. On a \
+busy news day it can run to about two minutes, around 300 words. The brief is the only \
+answer allowed past the sentence limit. Skip quiet sections in one line.
+
+Greetings
+{greeting_rule}
 
 Today is {today}.
 
@@ -98,9 +129,19 @@ The user's theses (notes/theses.md):
 def build_system_prompt(cfg: Config, watchlist: str, theses: str, today: date) -> str:
     return SYSTEM_PROMPT.format(
         max_sentences=cfg.brain.max_spoken_sentences,
+        greeting_rule=_greeting_rule(cfg.address_as),
         today=today.strftime("%A, %B %d, %Y"),
         watchlist=watchlist.strip() or "(empty)",
         theses=theses.strip() or "(none yet)",
+    )
+
+
+def _greeting_rule(address_as: str | None) -> str:
+    if not address_as:
+        return "If the user opens with a greeting, greet them back in a few words, then answer."
+    return (
+        f"The user is {address_as}. If they open with a greeting, start with the same greeting "
+        f'and their name, like "Good morning, {address_as}.", then answer.'
     )
 
 
@@ -124,6 +165,8 @@ class Brain:
         self.model = self.default_model
         self.last_brief_path: Path | None = None
         self._client: ClaudeSDKClient | None = None
+        self._in_flight = False  # a reply has started and its ResultMessage hasn't arrived
+        self._winding_down: asyncio.Task | None = None  # interrupt() finishing in the background
 
     def options(self) -> ClaudeAgentOptions:
         servers, allowed = registry.build(self.services)
@@ -151,9 +194,14 @@ class Brain:
         )
 
     async def __aenter__(self) -> Brain:
+        await self._connect()
+        return self
+
+    async def _connect(self) -> None:
         self._client = ClaudeSDKClient(self.options())
         await self._client.connect()
-        return self
+        self.model = self.default_model
+        self._in_flight = False
 
     async def __aexit__(self, *exc: Any) -> None:
         if self._client:
@@ -163,14 +211,24 @@ class Brain:
     async def ask(self, text: str) -> AsyncIterator[str]:
         """Stream the reply text as it's generated. Never raises for API trouble."""
         assert self._client, "use `async with Brain(...)` first"
+        if self._winding_down:  # a barge-in cut the last reply off
+            await self._winding_down
+            self._winding_down = None
         self.hooks.start_turn()
         self._log("user", text)
+        if hello := greeting_reply(text, self.cfg.address_as):
+            yield hello  # instant: no data needed, so no round trip to Claude
+            self._log("assistant", hello)
+            return
         parts: list[str] = []
         try:
             await self._pick_model(text)
             async for delta in self._stream(text):
                 parts.append(delta)
                 yield delta
+        except asyncio.CancelledError:  # barge-in: the caller then calls interrupt()
+            self._log("assistant", "".join(parts).strip() + " [interrupted]", self.model)
+            raise
         except Exception:
             log.exception("turn failed")
             sep = " " if parts else ""
@@ -180,9 +238,36 @@ class Brain:
         self._log("assistant", reply, self.model)
         self._maybe_save_brief(reply)
 
-    def tool_running_for(self) -> float:
-        """Seconds the current turn's slowest unfinished tool call has been running."""
-        return self.hooks.running_for()
+    async def interrupt(self) -> None:
+        """After a barge-in cancelled `ask`: stop the reply on the CLI side and read what's
+        left of it, so the next question starts clean. This runs in the background, so
+        Jarvis can listen straight away. The next `ask` waits for it. The cut-off reply's
+        late tool events are kept off the screen."""
+        if not self._client or not self._in_flight or self._winding_down:
+            return
+        self.hooks.muted = True
+        self._winding_down = asyncio.create_task(self._wind_down())
+
+    async def _wind_down(self) -> None:
+        try:
+            await asyncio.wait_for(self._drain(), INTERRUPT_SECONDS)
+        except Exception:
+            # Starting over loses the conversation so far, but beats a stuck session.
+            log.exception("interrupt didn't finish cleanly; starting a fresh session")
+            await self._client.disconnect()
+            await self._connect()
+        finally:
+            self._in_flight = False
+            self.hooks.muted = False
+
+    async def _drain(self) -> None:
+        await self._client.interrupt()
+        async for _ in self._client.receive_response():
+            pass
+
+    def looking_up(self) -> bool:
+        """True once this turn has called a tool (the voice then says "Checking.")."""
+        return bool(self.hooks.called)
 
     async def _pick_model(self, text: str) -> None:
         want = self.deep_model if wants_deep(text) else self.default_model
@@ -193,6 +278,7 @@ class Brain:
     async def _stream(self, text: str) -> AsyncIterator[str]:
         """Text deltas from the main thread of the turn, with a space between messages."""
         await self._client.query(text)
+        self._in_flight = True
         emitted = ""
         streamed_this_message = False
         async for msg in self._client.receive_response():
@@ -219,6 +305,7 @@ class Brain:
                     yield chunk
                 streamed_this_message = False
             elif isinstance(msg, ResultMessage):
+                self._in_flight = False
                 log.info(
                     "turn done in %sms (api %sms), %s agent turns, cost $%s",
                     msg.duration_ms,

@@ -1,6 +1,15 @@
+import numpy as np
 import pytest
 
-from jarvis.voice_in import Endpointer, Heard, clean_transcript, vocab_prompt
+from jarvis.voice_in import (
+    Endpointer,
+    Heard,
+    TalkOver,
+    clean_transcript,
+    normalize,
+    sounds_like_echo,
+    vocab_prompt,
+)
 
 
 def run(ends: Endpointer, pattern: str) -> list[Heard]:
@@ -75,3 +84,47 @@ def test_clean_transcript(raw, clean):
 def test_vocab_prompt():
     assert vocab_prompt(["USDC", "perps"]) == "Markets and crypto talk: USDC, perps."
     assert vocab_prompt([]) is None
+
+
+def test_talking_over_jarvis_needs_steady_speech():
+    over = TalkOver(min_speech=0.3, frame_seconds=0.1)
+    assert [over.feed(True, True) for _ in range(3)] == [False, False, True]
+
+
+def test_a_pause_resets_the_talk_over_count():
+    over = TalkOver(min_speech=0.3, frame_seconds=0.1)
+    for speech in (True, True, False, True, True):
+        assert over.feed(speech, True) is False
+    assert over.feed(True, True) is True
+
+
+def test_speech_while_jarvis_is_quiet_is_not_barge_in():
+    over = TalkOver(min_speech=0.3, frame_seconds=0.1)
+    assert not any(over.feed(True, False) for _ in range(10))
+
+
+def test_normalize_brings_quiet_speech_up_to_a_steady_peak():
+    quiet = np.array([0.0, 0.03, -0.015], np.float32)
+    assert np.isclose(np.max(np.abs(normalize(quiet))), 0.5)
+
+
+def test_normalize_caps_the_gain_so_noise_stays_quiet():
+    hiss = np.array([0.001, -0.001], np.float32)
+    assert np.isclose(np.max(np.abs(normalize(hiss))), 0.02)
+    assert normalize(np.zeros(4, np.float32)).tolist() == [0, 0, 0, 0]
+
+
+@pytest.mark.parametrize(
+    ("heard", "said", "echo"),
+    [
+        # From a speaker test with barge_in: voice. The mic heard Jarvis, not a person.
+        ("Two needs moved on.", "Two names moved on your watchlist, past your threshold.", True),
+        ("I think you're saying...", "I think you're saying my last answer came out", True),
+        # Real follow-ups that reuse Jarvis's words are too short to judge
+        ("What about Ethereum?", "Ethereum fell three point one percent.", False),
+        ("And Tether?", "Tether is holding its peg.", False),
+        ("Why did Hyperliquid jump so much today?", "Ethereum fell three percent.", False),
+    ],
+)
+def test_sounds_like_echo(heard, said, echo):
+    assert sounds_like_echo(heard, said) is echo

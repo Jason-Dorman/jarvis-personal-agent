@@ -2,7 +2,9 @@ wake_word:
   model: hey_jarvis
   sensitivity: 0.5
 followup_window_seconds: 8
-push_to_talk_hotkey: "ctrl+space"   # v1 uses the HUD's hold-Space; global hook comes later
+push_to_talk_hotkey: "ctrl+alt+space"   # hold anywhere to talk (Windows); null = off
+barge_in: wake_word         # wake_word: "Hey Jarvis" cuts in (speakers ok)
+                            # voice: any speech cuts in (headphones) | off
 
 audio:
   input_device: null        # null = Windows default mic; or part of a device name
@@ -21,7 +23,7 @@ brain:
   default_model: sonnet
   deep_model: opus
   effort: medium            # low | medium | high | xhigh | max (tune in Chunk 3)
-  max_spoken_sentences: 3
+  max_spoken_sentences: 5
 
 tts:
   voice: en_US-ryan-medium
@@ -35,5 +37,7 @@ news_feeds:
   - https://www.coindesk.com/arc/outboundfeeds/rss/
   - https://www.theblock.co/rss.xml
   - https://www.federalreserve.gov/feeds/press_all.xml
+
+address_as: "Mr. Dorman"  # "Good morning, Mr. Dorman." null = no name
 
 debug: false                # true lets audio touch disk for troubleshooting

@@ -106,17 +106,20 @@ Measured on the GTX 1660 Ti: whisper `small.en` on CUDA transcribes a question i
 
 Polish against the spec's performance targets.
 
-- [ ] Barge-in: VAD keeps running while Jarvis speaks. Speech cuts playback, cancels the in-flight reply, and starts a new turn. Needs headphones or a software echo canceller (see DECISIONS.md).
-- [ ] Timing log per turn: wake → listening, end of speech → first audio, tool time. Check it against spec section 10.
-- [ ] Latency: end of speech to first word is about 5 s on a one-tool question (target 2.5 s). Most of it is the brain. Start with prompt length, effort, and the 0.7 s silence.
-- [ ] Replies sometimes run to 4 sentences against `max_spoken_sentences: 3`. Tighten the prompt.
-- [ ] Global push-to-talk hotkey (`push_to_talk_hotkey`), if the HUD's hold-Space isn't enough (DECISIONS.md, open question 1)
-- [ ] Tune: whisper model size, VAD silence, wake sensitivity, prompt length and caching, effort level on the default model
-- [ ] Vocab accuracy check: read the vocab list aloud and measure hits (target 95%). Set `debug: true` to keep the WAVs in `logs/audio/` for replaying through whisper. Watch short follow-ups ("And Tether?" came through as "That's Tether." in the speaker test).
-- [ ] False-wake check: an hour of normal room noise (target under 1 per hour)
-- [ ] Run the v1 "done when" test and fix what breaks
+- [x] Barge-in: the ears keep listening while Jarvis works or speaks. The wake word or push-to-talk cuts playback, cancels the in-flight reply (drained in the background), and starts a new turn. `barge_in: voice` also lets plain speech interrupt, with headphones (DECISIONS.md). No software echo canceller.
+- [x] Timing log per turn: wake → chime, endpointing, speech-to-text, brain, tools, first word, answer start. Goes to the log and `turn_timings`. `python -m jarvis.checks timings` compares against spec 10.
+- [x] Latency: tuned, and the miss is written down (PO's call to stay on Sonnet + Agent SDK at effort medium). "Checking." now plays when the first tool call starts. Data is warmed on wake. First word median 2.97 s vs the 2.5 s target, answer start median 4.8 s. Text after a tool result arrives in one burst from the API, so it can't stream.
+- [x] Reply length: the PO wants more detail, so the cap is now 5 sentences, with context drawn from tool data. The prompt calls it a hard limit.
+- [x] Greeting (PO request): "Hey Jarvis, good morning" gets "Good morning, Mr. Dorman." right away, without calling Claude. The name is `address_as`.
+- [x] Global push-to-talk hotkey: Ctrl+Alt+Space through RegisterHotKey. It also interrupts.
+- [x] Tune: whisper stays `small.en` (`medium.en` wasn't better on vocab) with level normalization added, VAD silence stays 0.7 s, effort stays medium. Wake sensitivity stays 0.5, since the false-wake runs never came close.
+- [ ] Vocab accuracy check: built (`python -m jarvis.checks vocab`). Self-test with Piper's voice through the speakers: 85% vs the 95% target, with misses on USDT↔USDC and the short "And Tether?". **Needs a run with the PO's own voice.**
+- [x] False-wake check: 0 wakes in 23 min of a quiet room at night, and 0 in 4.2 min of continuous finance speech from the speakers. The highest wake score in the speech run was 0.01, against a threshold of 0.5. The quiet-room run was stopped early, since a quiet room at night says little. A full hour during a normal day (TV, people talking) is still worth doing: `python -m jarvis.checks wake --minutes 60`.
+- [x] v1 "done when" test, using Piper's voice through the speakers: five questions in a row by voice, one wake word then four follow-ups, no keyboard. Every spoken number matched the tool results. Two of the five were misheard (USDC → "this cold", Tether → "T-bills"), and Jarvis answered what it heard and named its guess. **Needs a run with the PO's own voice.**
 
 **Done when:** v1's done test passes, and the latency targets are met or the misses are written down in DECISIONS.md with the reason.
+
+**Status: built (2026-10-30). Waiting on the PO's own voice for the vocab and done tests.** Everything ran on laptop speakers and mic, driven by Piper's voice. That's a harsh stand-in for a person at the mic: peaks around −30 dBFS, and recognition is noticeably worse than with a live voice in Chunk 2. Barge-in was tested by wake word (during the brief) and by hotkey (injected key events), and `voice` mode was tested on speakers, where it loops on its own echo. That loop led to the echo guard. The latency misses and their reasons are in DECISIONS.md and spec 10.
 
 ---
 
@@ -125,8 +128,8 @@ Polish against the spec's performance targets.
 | Risk | What we do |
 |---|---|
 | **Native deps on Windows.** CUDA for faster-whisper (cuDNN/cuBLAS DLLs) and Piper/openWakeWord wheels can be fiddly on Windows. | Done in Chunk 2. CUDA works through NVIDIA's pip wheels (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`), so there's no system CUDA install. `voice_in.py` adds their DLL folders to the path and warms whisper up on the main thread. CPU int8 is the fallback. Gotchas are in the root README. |
-| **Echo during barge-in.** No PulseAudio `module-echo-cancel` on Windows, so speaker output can trigger the VAD. | Headphones for v1. See DECISIONS.md. |
-| **Agent SDK latency.** The Agent SDK runs the Claude Code harness as a subprocess. It's heavier than a plain API call and may eat into the 2.5 s target. | Measured in Chunk 1: session start 1 to 3 s (once), then about 3 s to first text for a one-tool question. That's over the 2.5 s target but close. Tune prompt length and effort in Chunk 3 first. If it's still too slow, swap `agent.py` to the plain Anthropic SDK tool runner behind the same interface. Ask the PO first, since the spec names the Agent SDK. |
+| **Echo during barge-in.** No PulseAudio `module-echo-cancel` on Windows, so speaker output can trigger the VAD. | Handled in Chunk 3: the default barge-in is the wake word, which works on speakers. Plain-voice barge-in needs headphones, and an echo guard switches it off if Jarvis hears itself. |
+| **Agent SDK latency.** The Agent SDK runs the Claude Code harness as a subprocess. It's heavier than a plain API call and may eat into the 2.5 s target. | Measured in Chunk 3: the harness isn't the main cost. Two API round trips are, and the post-tool reply comes in one burst even from the raw API. The PO chose to keep the Agent SDK and write the miss down (DECISIONS.md). A plain-API swap is still an option behind the same `Brain` interface. |
 | **yfinance on Windows.** Importing it (pandas, numpy) in a worker thread froze the app: the DLL load holds the OS loader lock and blocks every new thread. Its shared SQLite cache can also stall for minutes if another process is stuck. | Fixed in Chunk 1: yfinance is imported at startup on the main thread, and Yahoo calls get a 10 s budget per request, after which the symbol comes back as unavailable. |
 | **Free data API limits.** CoinGecko's free tier rate-limits, and yfinance is unofficial and flaky. | Short in-memory cache per symbol (about 30–60 s). Batch watchlist lookups. Return clean errors so Jarvis says "unavailable" instead of guessing. |
 | **Piper / openWakeWord install.** Native deps and ONNX models. | Done in Chunk 2. Both installed from wheels with no build step. openWakeWord runs its ONNX models (no tflite on Windows). Models download on first run, or up front with `uv run python -m jarvis.models`. |

@@ -51,27 +51,21 @@ def _call_id(data: Any, tool_use_id: str | None) -> str:
 class ToolHooks:
     """One per session. `called` lists (tool, fn) for the current turn.
 
-    `running_for()` says how long the oldest unfinished call has been going, so the
-    voice can say "Checking" when a tool is slow (spec 10).
+    The voice says "Checking." once `called` has anything in it (spec 6.5). While
+    `muted` (a barge-in cut the turn off), calls are still logged but nothing goes to
+    the screen.
     """
 
     def __init__(self, memory: Memory | None, hud: HudSink | None = None) -> None:
         self.memory = memory
         self.hud = hud
         self.called: list[tuple[str, str]] = []
+        self.muted = False
         self._started: dict[str, float] = {}
-        self._running: dict[str, float] = {}
 
     def start_turn(self) -> None:
         self.called = []
         self._started = {}
-        self._running = {}
-
-    def running_for(self) -> float:
-        """Seconds the oldest tool call still in flight has been running (0 if none)."""
-        if not self._running:
-            return 0.0
-        return time.monotonic() - min(self._running.values())
 
     def matchers(self) -> dict[str, list[HookMatcher]]:
         return {
@@ -86,7 +80,7 @@ class ToolHooks:
             return {}
         self.called.append(name)
         key = _call_id(data, tool_use_id)
-        self._started[key] = self._running[key] = time.monotonic()
+        self._started[key] = time.monotonic()
         await self._hud("tool_call", name[0], name[1], data.get("tool_input") or {})
         return {}
 
@@ -95,7 +89,6 @@ class ToolHooks:
         if not name:
             return {}
         tool, fn = name
-        self._running.pop(_call_id(data, tool_use_id), None)
         result = parse_tool_response(data.get("tool_response"))
         err = result.get("error") if isinstance(result, dict) else None
         self._log(data, tool_use_id, tool, fn, result, err)
@@ -111,9 +104,8 @@ class ToolHooks:
         name = split_mcp_name(data.get("tool_name", ""))
         if not name:
             return {}
-        self._running.pop(_call_id(data, tool_use_id), None)
         self._log(data, tool_use_id, name[0], name[1], None, data.get("error") or "tool failed")
-        if self.hud:
+        if self.hud and not self.muted:
             await self._safe(self.hud.tool_result(name[0]))
         return {}
 
@@ -135,6 +127,8 @@ class ToolHooks:
             log.exception("could not log tool call %s.%s", tool, fn)
 
     async def _show(self, tool: str, cards: list[dict[str, Any]]) -> None:
+        if self.muted:
+            return
         if not cards:
             await self._safe(self.hud.tool_result(tool))
             return
@@ -142,7 +136,7 @@ class ToolHooks:
             await self._safe(self.hud.card(**card))
 
     async def _hud(self, method: str, *args: Any) -> None:
-        if self.hud:
+        if self.hud and not self.muted:
             await self._safe(getattr(self.hud, method)(*args))
 
     @staticmethod

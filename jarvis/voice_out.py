@@ -6,7 +6,9 @@ Two stages run side by side, so sentence 2 is synthesized while sentence 1 plays
                                                                   │
                                        hud.speech when it starts ─┘ hud.level 20x/s
 
-Barge-in (Chunk 3) will call `stop()`; playback checks it between 50 ms blocks.
+Barge-in calls `stop()`. Every queued sentence carries the "generation" it was queued
+in, and `stop()` starts a new one, so anything older is dropped and playback stops
+within one 50 ms block. Audio queued after `stop()` (like the chime) plays as normal.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import asyncio
 import contextlib
 import logging
 import threading
+from collections import deque
 from collections.abc import Callable
 from typing import Protocol
 
@@ -64,9 +67,12 @@ class Speaker:
         self.device = device
         self.rate = voice.config.sample_rate
         self._block = self.rate // LEVEL_HZ
-        self._synth_q: asyncio.Queue[str] = asyncio.Queue()
-        self._play_q: asyncio.Queue[tuple[str, np.ndarray]] = asyncio.Queue()
-        self._stop = threading.Event()
+        self._synth_q: asyncio.Queue[tuple[int, str]] = asyncio.Queue()
+        self._play_q: asyncio.Queue[tuple[int, str, np.ndarray]] = asyncio.Queue()
+        self._gen = 0  # bumped by stop(); read by the playback thread
+        self._closing = threading.Event()
+        self._playing = False
+        self._recent: deque[str] = deque(maxlen=3)  # sentences that started playing
         self._out_lock = asyncio.Lock()
         self._stream: sd.OutputStream | None = None
         self._tasks: list[asyncio.Task] = []
@@ -95,7 +101,7 @@ class Speaker:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        self._stop.set()
+        self._closing.set()
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -108,8 +114,7 @@ class Speaker:
     # ---- the Voice interface (jarvis/turns.py) ----
     async def say(self, sentence: str) -> None:
         """Queue a sentence. Returns right away."""
-        self._stop.clear()
-        await self._synth_q.put(sentence)
+        await self._synth_q.put((self._gen, sentence))
 
     async def done(self) -> None:
         """Wait until everything queued has been spoken (or stopped)."""
@@ -117,12 +122,21 @@ class Speaker:
         await self._play_q.join()
 
     # ---- other controls ----
+    @property
+    def playing(self) -> bool:
+        """True while a sentence's audio is going out (not the chime)."""
+        return self._playing
+
+    def recent_speech(self) -> str:
+        """The last few sentences that went out, to spot Jarvis hearing itself."""
+        return " ".join(self._recent)
+
     async def chime(self) -> None:
-        await self._write(self._chime, None)
+        await self._write(self._chime, None, self._gen)
 
     def stop(self) -> None:
-        """Cut playback now and drop anything queued."""
-        self._stop.set()
+        """Barge-in: cut playback now and drop anything queued."""
+        self._gen += 1
         for q in (self._synth_q, self._play_q):
             while not q.empty():
                 q.get_nowait()
@@ -131,12 +145,12 @@ class Speaker:
     # ---- workers ----
     async def _synth_worker(self) -> None:
         while True:
-            sentence = await self._synth_q.get()
+            gen, sentence = await self._synth_q.get()
             try:
-                if text := speakable(sentence):
+                if gen == self._gen and (text := speakable(sentence)):
                     pcm = await asyncio.to_thread(self._synthesize, text)
-                    if not self._stop.is_set():
-                        await self._play_q.put((sentence, pcm))
+                    if gen == self._gen:
+                        await self._play_q.put((gen, sentence, pcm))
             except Exception:
                 log.exception("could not synthesize %r", sentence)
             finally:
@@ -144,15 +158,18 @@ class Speaker:
 
     async def _play_worker(self) -> None:
         while True:
-            sentence, pcm = await self._play_q.get()
+            gen, sentence, pcm = await self._play_q.get()
             try:
-                if not self._stop.is_set():
+                if gen == self._gen:
+                    self._playing = True
+                    self._recent.append(sentence)
                     await self.hud.state("speaking")
                     await self.hud.speech(sentence)  # the moment its audio starts
-                    await self._write(pcm, self._level_sender())
+                    await self._write(pcm, self._level_sender(), gen)
             except Exception:
                 log.exception("playback failed")
             finally:
+                self._playing = False
                 self._play_q.task_done()
 
     def _synthesize(self, text: str) -> np.ndarray:
@@ -167,17 +184,21 @@ class Speaker:
 
         return send
 
-    async def _write(self, pcm: np.ndarray, on_level: Callable[[float], None] | None) -> None:
+    async def _write(
+        self, pcm: np.ndarray, on_level: Callable[[float], None] | None, gen: int
+    ) -> None:
         async with self._out_lock:
-            await asyncio.to_thread(self._write_blocks, pcm, on_level)
+            await asyncio.to_thread(self._write_blocks, pcm, on_level, gen)
         if on_level:
             on_level(0.0)
 
-    def _write_blocks(self, pcm: np.ndarray, on_level: Callable[[float], None] | None) -> None:
+    def _write_blocks(
+        self, pcm: np.ndarray, on_level: Callable[[float], None] | None, gen: int
+    ) -> None:
         """Runs in a worker thread. Blocking writes, one 50 ms block at a time."""
         assert self._stream, "use `async with Speaker(...)` first"
         for start in range(0, len(pcm), self._block):
-            if self._stop.is_set():
+            if gen != self._gen or self._closing.is_set():
                 return
             block = pcm[start : start + self._block]
             if on_level:

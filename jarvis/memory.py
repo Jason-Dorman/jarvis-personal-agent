@@ -1,4 +1,5 @@
-"""SQLite memory (spec 6.8): price snapshots, the tool call log, and the conversation log.
+"""SQLite memory (spec 6.8): price snapshots, the tool call log, the conversation log,
+and per-turn timings (spec 10).
 
 Timestamps are ISO-8601 UTC strings. Tool inputs and outputs are stored as JSON text.
 """
@@ -42,6 +43,17 @@ CREATE TABLE IF NOT EXISTS conversation (
     model       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_session ON conversation (session_id, ts);
+
+CREATE TABLE IF NOT EXISTS turn_timings (
+    id          INTEGER PRIMARY KEY,
+    ts          TEXT NOT NULL,
+    source      TEXT NOT NULL,     -- wake | ptt | follow_up | typed
+    question    TEXT,
+    model       TEXT,
+    tool_calls  INTEGER NOT NULL,
+    interrupted INTEGER NOT NULL,  -- 1 if barge-in cut the answer off
+    spans       TEXT NOT NULL      -- JSON: span name -> ms (jarvis/timing.py)
+);
 """
 
 
@@ -114,3 +126,27 @@ class Memory:
                 " VALUES (?, ?, ?, ?, ?)",
                 (ts or _now(), session_id, role, text, model),
             )
+
+    def log_timing(self, record: dict[str, Any], ts: str | None = None) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO turn_timings"
+                " (ts, source, question, model, tool_calls, interrupted, spans)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ts or _now(),
+                    record["source"],
+                    record.get("question"),
+                    record.get("model"),
+                    record["tool_calls"],
+                    int(bool(record.get("interrupted"))),
+                    json.dumps(record["spans"]),
+                ),
+            )
+
+    def recent_timings(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Newest first, spans decoded."""
+        rows = self.conn.execute(
+            "SELECT * FROM turn_timings ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [{**dict(r), "spans": json.loads(r["spans"])} for r in rows]
