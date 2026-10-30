@@ -34,6 +34,7 @@ class Hud:
     def __init__(self) -> None:
         self.clients: set[WebSocket] = set()
         self.inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.last_ticker: list[dict] = []  # replayed to screens that connect later
 
     async def emit(self, type: str, **data: Any) -> None:
         msg = json.dumps({"type": type, **data})
@@ -74,6 +75,7 @@ class Hud:
         await self.emit("level", value=round(max(0.0, min(1.0, value)), 3))
 
     async def ticker(self, items: list[dict]) -> None:
+        self.last_ticker = items
         await self.emit("ticker", items=items)
 
     async def clear(self) -> None:
@@ -165,6 +167,8 @@ async def index() -> FileResponse:
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     hud.clients.add(ws)
+    if hud.last_ticker:
+        await ws.send_text(json.dumps({"type": "ticker", "items": hud.last_ticker}))
     try:
         while True:
             await hud.inbox.put(await ws.receive_json())

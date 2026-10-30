@@ -32,39 +32,41 @@ The whole brain, every tool, the morning brief, and the HUD wired up. No audio y
 ### Tools (`tools/`)
 Each is an in-process MCP server built with the Agent SDK, so there are no extra processes to manage. Put the data-fetching logic in plain functions (for example `tools/markets.py`) and keep the MCP wrapper thin. The `brief` tool and the tests call the plain functions directly.
 
-- [ ] `markets`: `get_price`, `get_movers`, `get_watchlist_snapshot` (CoinGecko for crypto, yfinance for stocks/ETFs/rates). Writes price snapshots to SQLite.
-- [ ] `pegs`: `get_peg`, `get_supply_change`, `list_peg_alerts` (DefiLlama stablecoins API)
-- [ ] `news`: `get_headlines`, `get_article_summary` (RSS from `config.yaml`, `feedparser`)
-- [ ] `notes`: `read_notes`, `append_note` (only inside `notes/`, rejects path escapes)
-- [ ] `brief`: `get_brief_data`, which returns watchlist movers over threshold, peg status, top headlines, and the theses text in one structured result
-- [ ] Every tool returns structured data plus a clear `error` field on failure. It never raises into the model.
-- [ ] Every tool call is logged to `tool_calls` (time, inputs, outputs)
+- [x] `markets`: `get_price`, `get_movers`, `get_watchlist_snapshot` (CoinGecko for crypto, yfinance for stocks/ETFs/rates). Writes price snapshots to SQLite.
+- [x] `pegs`: `get_peg`, `get_supply_change`, `list_peg_alerts` (DefiLlama stablecoins API)
+- [x] `news`: `get_headlines`, `get_article_summary` (RSS from `config.yaml`, `feedparser`)
+- [x] `notes`: `read_notes`, `append_note` (only inside `notes/`, rejects path escapes)
+- [x] `brief`: `get_brief_data`, which returns watchlist movers over threshold, peg status, top headlines, and the theses text in one structured result
+- [x] Every tool returns structured data plus a clear `error` field on failure. It never raises into the model.
+- [x] Every tool call is logged to `tool_calls` (time, inputs, outputs)
 
 ### Brain (`jarvis/agent.py`)
-- [ ] Claude Agent SDK session (`ClaudeSDKClient`) with conversation history for the session
-- [ ] **Turn off every built-in Agent SDK tool** (Bash, file edits, web, and so on). Allow only our MCP tools. This is how the read-only rule is enforced.
-- [ ] System prompt with the voice rules (spec 6.4), the brief order (spec 8), and the contents of `watchlist.md` and `theses.md` loaded at session start
-- [ ] Model switch: Sonnet by default, Opus when the user says "think hard" or "deep dive"
-- [ ] Stream the reply text out as it arrives. Chunk 2 hangs TTS off this stream.
-- [ ] Brief detection: if `brief.get_brief_data` was called during a turn, save the final reply to `briefs/YYYY-MM-DD.md`
-- [ ] Log each turn to `conversation`
+- [x] Claude Agent SDK session (`ClaudeSDKClient`) with conversation history for the session
+- [x] **Turn off every built-in Agent SDK tool** (Bash, file edits, web, and so on). Allow only our MCP tools. This is how the read-only rule is enforced.
+- [x] System prompt with the voice rules (spec 6.4), the brief order (spec 8), and the contents of `watchlist.md` and `theses.md` loaded at session start
+- [x] Model switch: Sonnet by default, Opus when the user says "think hard" or "deep dive"
+- [x] Stream the reply text out as it arrives. Chunk 2 hangs TTS off this stream.
+- [x] Brief detection: if `brief.get_brief_data` was called during a turn, save the final reply to `briefs/YYYY-MM-DD.md`
+- [x] Log each turn to `conversation`
 
 ### HUD wiring
-- [ ] Wrap every tool call: `hud.tool_call` before it runs, `hud.card` (or `hud.tool_result`) after. Use the SDK's pre/post tool hooks so the tools don't know the HUD exists.
-- [ ] `jarvis/cards.py`: one card builder per (tool, fn), built from tool data only (spec 15.6)
-- [ ] Tell the brain which panels are on screen and their keys
-- [ ] Typed questions from `hud.inbox` drive the agent. Without audio, `speech` events go out per sentence as text is generated.
-- [ ] Ticker: push the watchlist snapshot at startup and every few minutes
+- [x] Wrap every tool call: `hud.tool_call` before it runs, `hud.card` (or `hud.tool_result`) after. Use the SDK's pre/post tool hooks so the tools don't know the HUD exists.
+- [x] `jarvis/cards.py`: one card builder per (tool, fn), built from tool data only (spec 15.6)
+- [x] Tell the brain which panels are on screen and their keys
+- [x] Typed questions from `hud.inbox` drive the agent. Without audio, `speech` events go out per sentence as text is generated.
+- [x] Ticker: push the watchlist snapshot at startup and every few minutes
 
 ### Entry points
-- [ ] `uv run python -m jarvis.main --text`: terminal REPL plus HUD
-- [ ] `uv run python -m jarvis.brief`: prints the brief and saves it
+- [x] `uv run python -m jarvis.main --text`: terminal REPL plus HUD
+- [x] `uv run python -m jarvis.brief`: prints the brief and saves it
 
 ### Tests
-- [ ] Each tool's parsing against saved API responses in `tests/fixtures/` (no live network in tests)
-- [ ] Card builders, brief data assembly, notes path safety
+- [x] Each tool's parsing against saved API responses in `tests/fixtures/` (no live network in tests)
+- [x] Card builders, brief data assembly, notes path safety
 
 **Done when:** you type "how's USDC holding up?", "what moved on my watchlist?", "give me my morning brief", and "note that…" in the HUD. Each one returns real numbers, the panels appear, and a brief file is saved.
+
+**Status: done (2026-10-29).** All four questions pass end to end through the HUD WebSocket with live data. Measured latency, typed question to first text: about 3 s for a one-tool question, about 7 s for the brief, about 8 s for an Opus "think hard" turn with three tools. Chunk 3 tunes this against spec 10.
 
 ---
 
@@ -117,6 +119,7 @@ Polish against the spec's performance targets.
 |---|---|
 | **Native deps on Windows.** CUDA for faster-whisper (cuDNN/cuBLAS DLLs) and Piper/openWakeWord wheels can be fiddly on Windows. | Test CUDA at the start of Chunk 2 and fall back to CPU int8 if it fights back. Write every gotcha in the root README. |
 | **Echo during barge-in.** No PulseAudio `module-echo-cancel` on Windows, so speaker output can trigger the VAD. | Headphones for v1. See DECISIONS.md. |
-| **Agent SDK latency.** The Agent SDK runs the Claude Code harness as a subprocess. It's heavier than a plain API call and may eat into the 2.5 s target. | Measure in Chunk 1. If it's too slow, swap `agent.py` to the plain Anthropic SDK tool runner behind the same interface. Ask the PO first, since the spec names the Agent SDK. |
+| **Agent SDK latency.** The Agent SDK runs the Claude Code harness as a subprocess. It's heavier than a plain API call and may eat into the 2.5 s target. | Measured in Chunk 1: session start 1 to 3 s (once), then about 3 s to first text for a one-tool question. That's over the 2.5 s target but close. Tune prompt length and effort in Chunk 3 first. If it's still too slow, swap `agent.py` to the plain Anthropic SDK tool runner behind the same interface. Ask the PO first, since the spec names the Agent SDK. |
+| **yfinance on Windows.** Importing it (pandas, numpy) in a worker thread froze the app: the DLL load holds the OS loader lock and blocks every new thread. Its shared SQLite cache can also stall for minutes if another process is stuck. | Fixed in Chunk 1: yfinance is imported at startup on the main thread, and Yahoo calls get a 10 s budget per request, after which the symbol comes back as unavailable. |
 | **Free data API limits.** CoinGecko's free tier rate-limits, and yfinance is unofficial and flaky. | Short in-memory cache per symbol (about 30–60 s). Batch watchlist lookups. Return clean errors so Jarvis says "unavailable" instead of guessing. |
 | **Piper / openWakeWord install.** Native deps and ONNX models. | Pin versions in `pyproject.toml`. Put model downloads in a setup script. Write down every gotcha in the root README as it comes up. |

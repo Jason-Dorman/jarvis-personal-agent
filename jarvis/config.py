@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,9 +37,22 @@ class Stt(_Section):
     vocab: list[str] = []
 
 
+# Short names in config.yaml map to exact model IDs, so an alias can't drift.
+MODEL_IDS = {
+    "sonnet": "claude-sonnet-5-5",
+    "opus": "claude-opus-5-5",
+    "haiku": "claude-haiku-5-5",
+}
+
+
+def model_id(name: str) -> str:
+    return MODEL_IDS.get(name, name)
+
+
 class Brain(_Section):
     default_model: str = "sonnet"
     deep_model: str = "opus"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     max_spoken_sentences: int = Field(3, ge=1)
 
 

@@ -9,6 +9,11 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "pyyaml>=6.0",
+    "claude-agent-sdk>=0.2.174",
+    "yfinance>=1.7.0",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.4",
 ]
 
 [dependency-groups]

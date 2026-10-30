@@ -18,48 +18,43 @@ uv run python hud/server.py --demo
 
 Open http://localhost:8765. The dot in the top right turns green when the page is linked. Type anything. The bridge answers with a short test turn.
 
-Drop `--demo` once your agent drives it.
+For the real Jarvis, run `uv run python -m jarvis.main --text` from the repo root instead. It serves the same page on the same port.
 
 ## Wire it to Jarvis
 
-Import the `hud` object from `hud/server.py` (run Jarvis from the repo root so `hud` is importable). Call it from three places.
+Import the `hud` object from `hud/server.py` (run Jarvis from the repo root so `hud` is importable). It's called from three places.
 
-**1. Around every tool call (agent)**
+**1. Around every tool call (done: `jarvis/hooks.py`)**
+
+The Agent SDK's pre/post tool hooks send `tool_call` before each tool runs and a card (or `tool_result`) after. Cards are built in `jarvis/cards.py` from the tool's own result, never from the model's words. The tools themselves don't know the HUD exists. The post hook also tells the brain which panels just went on screen and their key words.
 
 ```python
-from hud.server import hud
+# jarvis/hooks.py, simplified
+async def pre(self, data, tool_use_id, ctx):
+    tool, fn = split_mcp_name(data["tool_name"])  # "mcp__pegs__get_peg" → ("pegs", "get_peg")
+    await hud.tool_call(tool, fn, data["tool_input"])
+    return {}
 
 
-async def run_tool(tool, fn, args):
-    await hud.tool_call(tool, fn, args)
-    result = await call_mcp(tool, fn, args)  # your MCP client
-    card = card_for(tool, fn, result)  # build from data, not model text
-    if card:
+async def post(self, data, tool_use_id, ctx):
+    tool, fn = split_mcp_name(data["tool_name"])
+    result = parse_tool_response(data["tool_response"])
+    cards = cards_for(tool, fn, result)  # [] for errors
+    for card in cards:
         await hud.card(**card)
-    else:
+    if not cards:
         await hud.tool_result(tool)
-    return result
-
-
-def card_for(tool, fn, r):
-    if (tool, fn) == ("pegs", "get_peg"):
-        return dict(
-            id=f"peg-{r['symbol']}",
-            tool=tool,
-            kind="metric",
-            title=f"{r['symbol']} peg",
-            keys=[r["symbol"].lower()],
-            value=r["price"],
-            decimals=4,
-            unit="USD",
-            spark=r.get("history"),
-            source="DefiLlama",
-            status="warn" if abs(r["price"] - 1) > 0.003 else None,
-        )
-    return None
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": panel_hint(cards),
+        }
+    }
 ```
 
-**2. In speech-to-text (voice_in)**
+The ticker is pushed at startup and every 5 minutes (`jarvis/main.py`). The server keeps the last one and sends it to any screen that connects later.
+
+**2. In speech-to-text (voice_in, Chunk 2)**
 
 ```python
 await hud.state("listening")
@@ -68,7 +63,9 @@ await hud.heard(full_text, final=True)  # when you stop talking
 await hud.state("thinking")
 ```
 
-**3. In playback (voice_out)**
+**3. In playback (voice_out, Chunk 2)**
+
+Until then, `jarvis/turns.py` sends `speech` as each sentence is generated.
 
 ```python
 await hud.state("speaking")

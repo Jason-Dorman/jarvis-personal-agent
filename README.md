@@ -27,13 +27,25 @@ Runs on native Windows 11 (PowerShell). It should also work on Linux and macOS.
 ## Run
 
 ```bash
+uv run python -m jarvis.main --text      # typed REPL + HUD
+uv run python -m jarvis.brief            # print and save a morning brief, no HUD
 uv run python hud/server.py --demo       # HUD only, with test turns
-uv run python -m jarvis.main --text      # typed REPL + HUD (Chunk 1, not built yet)
 uv run python -m jarvis.main             # full voice (Chunk 2, not built yet)
-uv run python -m jarvis.brief            # print and save a morning brief (Chunk 1, not built yet)
 ```
 
-The HUD is at http://localhost:8765. See [hud/README.md](hud/README.md) for how it's wired.
+The HUD is at http://localhost:8765. In `--text` mode you can type questions in the terminal or in the HUD. Both go to the same queue. Type `quit` to stop. See [hud/README.md](hud/README.md) for how the screen is wired.
+
+Try: "how's USDC holding up?", "what moved on my watchlist?", "give me my morning brief", "note that I think tokenized treasuries hit $20B by year end". Add "think hard" or "deep dive" to a question to use Opus for that one answer.
+
+Briefs are saved to `briefs/YYYY-MM-DD.md`. Saved thoughts go to `notes/theses.md` (theses) or `notes/inbox.md` (everything else).
+
+## Gotchas
+
+- **The brain needs `ANTHROPIC_API_KEY` in `.env`.** The Agent SDK ships its own Claude Code CLI, so there's nothing else to install.
+- **"Port 8765 is busy"** means another Jarvis or `hud/server.py` is still running. Close it, or use `--port`.
+- **Stock prices "unavailable".** Yahoo Finance (via yfinance) is unofficial and sometimes slow. Jarvis gives each request 10 seconds, then says the price is unavailable rather than guessing. yfinance keeps a cache in `%LOCALAPPDATA%\py-yfinance`. If a stuck Python process holds it, stock lookups time out until that process is closed.
+- **yfinance must be imported on the main thread on Windows.** Importing it lazily in a worker thread froze the whole app (numpy's DLL load blocks every new thread). `tools/markets.py` imports it at the top for this reason. Keep it that way.
+- **Something odd?** Check `logs/jarvis.log`. Every tool call (inputs, outputs, errors, timing) is also in the `tool_calls` table of `jarvis.db`.
 
 ## Develop
 

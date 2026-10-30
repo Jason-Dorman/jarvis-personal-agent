@@ -11,6 +11,7 @@ stt:
 brain:
   default_model: sonnet
   deep_model: opus
+  effort: medium            # low | medium | high | xhigh | max (tune in Chunk 3)
   max_spoken_sentences: 3
 
 tts:

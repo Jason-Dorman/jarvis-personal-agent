@@ -109,8 +109,11 @@ All audio stays local. Only the transcribed text goes to Claude.
 
 ### 6.4 Brain
 - **Tool:** Claude Agent SDK, Python.
-- Default model: Claude Sonnet (`claude-sonnet-5-5`). Use Claude Opus (`claude-opus-5-5`) only when you say "think hard" or "deep dive."
+- Default model: Claude Sonnet (`claude-sonnet-5-5`). Use Claude Opus (`claude-opus-5-5`) only when you say "think hard" or "deep dive." The switch lasts for that one question. The next question goes back to Sonnet.
 - Keeps the conversation history for the current session.
+- **Locked down.** Every built-in Agent SDK tool is off. Only Jarvis's 11 MCP tools are allowed, and anything else is denied without asking. The session ignores any `CLAUDE.md` or Claude settings on the machine, and prompts are passed through as typed (no `@file` expansion).
+- Reads `watchlist.md` and `theses.md` into the system prompt at session start, along with today's date.
+- Streams reply text as it's generated. Each turn is logged to `conversation`.
 - **Voice rules in the system prompt:**
   - Answer in 1–3 short sentences unless asked for more.
   - Lead with the answer.
@@ -147,13 +150,22 @@ Each tool is its own MCP server. Each one does one thing.
 
 | Tool | Functions | Source |
 |---|---|---|
-| `markets` | `get_price(symbol)`, `get_movers()`, `get_watchlist_snapshot()` | CoinGecko (crypto), yfinance (stocks, ETFs, rates) |
-| `pegs` | `get_peg(stablecoin)`, `get_supply_change(stablecoin, days)`, `list_peg_alerts()` | DefiLlama stablecoins API |
-| `news` | `get_headlines(topic, hours)`, `get_article_summary(url)` | RSS feeds listed in `config.yaml` |
-| `notes` | `read_notes(file)`, `append_note(file, text)` | Local `notes/` folder |
+| `markets` | `get_price(symbol, asset_type="auto")`, `get_movers()`, `get_watchlist_snapshot()` | CoinGecko (crypto), yfinance (stocks, ETFs, rates) |
+| `pegs` | `get_peg(stablecoin)`, `get_supply_change(stablecoin, days=7)`, `list_peg_alerts()` | DefiLlama stablecoins API |
+| `news` | `get_headlines(topic=None, hours=24)`, `get_article_summary(url)` | RSS feeds listed in `config.yaml` |
+| `notes` | `read_notes(file=None)`, `append_note(file, text, heading=None)` | Local `notes/` folder |
 | `brief` | `get_brief_data()` | Gathers watchlist movers, pegs, headlines, and theses in one call by reusing the other tools' code |
 
-Every tool call is logged with time, inputs, and outputs.
+Every tool call is logged with time, inputs, outputs, and duration.
+
+Tool details:
+
+- **Results.** Every tool returns structured data. On failure it returns `{"error": "..."}` and never raises, so Jarvis can say the data is unavailable.
+- **Prices.** Crypto change is CoinGecko's rolling 24 hours. Stock, ETF, and rate change is close to close over one trading day. Quotes are cached for 45 seconds, and every fresh quote is saved to `price_snapshots`. Yahoo calls share a 10 second budget per request. Past that, the symbol comes back as unavailable.
+- **`get_price` lookup.** With `asset_type="auto"`, a symbol on the watchlist uses its watchlist kind. Otherwise a known coin is crypto, anything else is tried as a stock first, then as a coin.
+- **Pegs.** Only USD pegs are judged. A coin is `warn` at 0.5% off $1 and `alert` at 2%. `list_peg_alerts` only reports coins with more than $1B in supply. When two coins share a symbol, the bigger one wins.
+- **Headlines.** A topic matches when every topic word appears in the title or summary (plurals match). Duplicate titles across feeds are dropped. `get_article_summary` only fetches public `http(s)` links, never localhost or private network addresses.
+- **Notes.** File names resolve inside `notes/` only (`theses` → `notes/theses.md`). Anything that would leave the folder is rejected. With a `heading`, a note is added as a new `## heading` section with the date. Without one, it's a dated bullet. Theses go to `theses.md`, other saved thoughts to `inbox.md`.
 
 ---
 
@@ -167,7 +179,7 @@ Runs only when you ask (see 6.7). Spoken in this order. Target 60–90 seconds. 
 4. Top 3 fintech or digital-asset headlines.
 5. Anything that touches one of your theses.
 
-The full text is saved to `briefs/YYYY-MM-DD.md`. Asking again on the same day replaces that file.
+The full text is saved to `briefs/YYYY-MM-DD.md`. Asking again on the same day replaces that file. A reply counts as a brief when `brief.get_brief_data` was called during that turn. Each part of the brief data fails on its own, so one dead source leaves a gap, not a failed brief.
 
 ---
 
@@ -209,8 +221,9 @@ stt:
   vocab: [USDC, USDT, perps, RWA, Hyperliquid, basis, T-bills, stablecoin]
 
 brain:
-  default_model: sonnet
-  deep_model: opus
+  default_model: sonnet      # sonnet → claude-sonnet-5-5
+  deep_model: opus           # opus → claude-opus-5-5
+  effort: medium             # low | medium | high | xhigh | max
   max_spoken_sentences: 3
 
 tts:
@@ -229,7 +242,7 @@ news_feeds:
 debug: false                # true lets audio touch disk for troubleshooting
 ```
 
-Unknown keys and out-of-range values are rejected at startup. Relative file paths resolve against the folder `config.yaml` is in.
+Unknown keys and out-of-range values are rejected at startup. Relative file paths resolve against the folder `config.yaml` is in. Model names `sonnet`, `opus`, and `haiku` map to exact model IDs in `jarvis/config.py`. Any other value is passed through as a model ID.
 
 ---
 
@@ -243,23 +256,32 @@ jarvis/
 ├── config.yaml
 ├── jarvis/
 │   ├── config.py           # typed settings from config.yaml
-│   ├── main.py             # starts the voice loop
-│   ├── voice_in.py         # wake word, VAD, speech-to-text
-│   ├── voice_out.py        # Piper, streaming, barge-in
+│   ├── main.py             # entry point: --text REPL + HUD now, voice loop in Chunk 2
+│   ├── runtime.py          # startup shared by entry points: .env, config, db, services
+│   ├── voice_in.py         # wake word, VAD, speech-to-text (Chunk 2)
+│   ├── voice_out.py        # Piper, streaming, barge-in (Chunk 2)
 │   ├── agent.py            # Claude + tool wiring + voice rules
+│   ├── hooks.py            # pre/post tool hooks: HUD events, tool log, panel hints
+│   ├── cards.py            # HUD panels built from tool results
+│   ├── turns.py            # one question → streamed answer, HUD kept in step
+│   ├── speech.py           # sentence splitter for the streamed reply
 │   ├── brief.py            # brief data + save; `python -m jarvis.brief` for text-only
 │   └── memory.py           # SQLite read/write
 ├── tools/
-│   ├── markets_server.py
-│   ├── pegs_server.py
-│   ├── news_server.py
-│   ├── notes_server.py
-│   └── brief_server.py
+│   ├── common.py           # error results, safe MCP wrapper, HTTP, cache
+│   ├── services.py         # shared data services (one HTTP client)
+│   ├── registry.py         # all MCP servers + the tool allow list
+│   ├── markets.py  · markets_server.py   # data logic · thin MCP wrapper
+│   ├── pegs.py     · pegs_server.py
+│   ├── news.py     · news_server.py
+│   ├── notes.py    · notes_server.py
+│   └── brief_server.py     # wraps jarvis/brief.py
 ├── hud/                    # see section 15.7
 ├── tests/
 ├── notes/
 │   ├── watchlist.md
-│   └── theses.md
+│   ├── theses.md
+│   └── inbox.md            # other saved thoughts, created on first use
 ├── briefs/
 ├── logs/
 └── jarvis.db
@@ -323,9 +345,9 @@ voice_in ──► agent ──► voice_out
 | `tool_call` | `tool`, `fn`, `args` | Right before a tool runs |
 | `tool_result` | `tool` | Tool finished with no panel |
 | `card` | see 15.4 | Right after a tool returns |
-| `speech` | `text` | The moment each sentence's audio starts |
+| `speech` | `text` | The moment each sentence's audio starts. In `--text` mode (no audio), as each sentence is generated. |
 | `level` | `value` 0–1 | About 20 times a second while speaking |
-| `ticker` | `items`: `[{symbol, price, delta}]` | On watchlist refresh |
+| `ticker` | `items`: `[{symbol, price, delta, decimals}]` | At startup, then every 5 minutes. Replayed to a screen when it connects. |
 | `clear` | none | Start of each new question |
 
 ### 15.4 Panel kinds
@@ -355,7 +377,7 @@ The agent reads these from `hud.inbox`.
 ### 15.6 Wiring rules
 
 - Wrap every tool call: `tool_call` before, `card` after. Build the card from the tool result, never from the model's words.
-- Tell the brain which panels are on screen and their keys. Ask it to name each one when it speaks about it.
+- Tell the brain which panels are on screen and their keys. Ask it to name each one when it speaks about it. Jarvis does this per tool call: the post-tool hook adds a short note to the tool result (`Panels on screen: 'USDC peg' (say: usdc, usd coin)`).
 - `voice_out` sends `speech` when a sentence starts playing, not when it's generated. That keeps the captions in sync with the voice.
 - `voice_out` sends `level` from the playback audio's loudness.
 
