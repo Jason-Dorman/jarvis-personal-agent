@@ -44,18 +44,34 @@ def parse_tool_response(response: Any) -> Any:
     return response
 
 
+def _call_id(data: Any, tool_use_id: str | None) -> str:
+    return data.get("tool_use_id") or tool_use_id or ""
+
+
 class ToolHooks:
-    """One per session. `called` lists (tool, fn) for the current turn."""
+    """One per session. `called` lists (tool, fn) for the current turn.
+
+    `running_for()` says how long the oldest unfinished call has been going, so the
+    voice can say "Checking" when a tool is slow (spec 10).
+    """
 
     def __init__(self, memory: Memory | None, hud: HudSink | None = None) -> None:
         self.memory = memory
         self.hud = hud
         self.called: list[tuple[str, str]] = []
         self._started: dict[str, float] = {}
+        self._running: dict[str, float] = {}
 
     def start_turn(self) -> None:
         self.called = []
         self._started = {}
+        self._running = {}
+
+    def running_for(self) -> float:
+        """Seconds the oldest tool call still in flight has been running (0 if none)."""
+        if not self._running:
+            return 0.0
+        return time.monotonic() - min(self._running.values())
 
     def matchers(self) -> dict[str, list[HookMatcher]]:
         return {
@@ -69,7 +85,8 @@ class ToolHooks:
         if not name:
             return {}
         self.called.append(name)
-        self._started[data.get("tool_use_id") or tool_use_id or ""] = time.monotonic()
+        key = _call_id(data, tool_use_id)
+        self._started[key] = self._running[key] = time.monotonic()
         await self._hud("tool_call", name[0], name[1], data.get("tool_input") or {})
         return {}
 
@@ -78,6 +95,7 @@ class ToolHooks:
         if not name:
             return {}
         tool, fn = name
+        self._running.pop(_call_id(data, tool_use_id), None)
         result = parse_tool_response(data.get("tool_response"))
         err = result.get("error") if isinstance(result, dict) else None
         self._log(data, tool_use_id, tool, fn, result, err)
@@ -93,6 +111,7 @@ class ToolHooks:
         name = split_mcp_name(data.get("tool_name", ""))
         if not name:
             return {}
+        self._running.pop(_call_id(data, tool_use_id), None)
         self._log(data, tool_use_id, name[0], name[1], None, data.get("error") or "tool failed")
         if self.hud:
             await self._safe(self.hud.tool_result(name[0]))
@@ -106,7 +125,7 @@ class ToolHooks:
             return
         duration = data.get("duration_ms")
         if duration is None:
-            started = self._started.pop(data.get("tool_use_id") or tool_use_id or "", None)
+            started = self._started.pop(_call_id(data, tool_use_id), None)
             duration = int((time.monotonic() - started) * 1000) if started else None
         try:
             self.memory.log_tool_call(

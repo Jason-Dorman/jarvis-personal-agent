@@ -180,6 +180,10 @@ class Brain:
         self._log("assistant", reply, self.model)
         self._maybe_save_brief(reply)
 
+    def tool_running_for(self) -> float:
+        """Seconds the current turn's slowest unfinished tool call has been running."""
+        return self.hooks.running_for()
+
     async def _pick_model(self, text: str) -> None:
         want = self.deep_model if wants_deep(text) else self.default_model
         if want != self.model:

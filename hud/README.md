@@ -18,7 +18,7 @@ uv run python hud/server.py --demo
 
 Open http://localhost:8765. The dot in the top right turns green when the page is linked. Type anything. The bridge answers with a short test turn.
 
-For the real Jarvis, run `uv run python -m jarvis.main --text` from the repo root instead. It serves the same page on the same port.
+For the real Jarvis, run `uv run python -m jarvis.main` (voice) or `uv run python -m jarvis.main --text` from the repo root instead. It serves the same page on the same port.
 
 ## Wire it to Jarvis
 
@@ -54,27 +54,31 @@ async def post(self, data, tool_use_id, ctx):
 
 The ticker is pushed at startup and every 5 minutes (`jarvis/main.py`). The server keeps the last one and sends it to any screen that connects later.
 
-**2. In speech-to-text (voice_in, Chunk 2)**
+**2. While listening (done: `jarvis/conversation.py`)**
+
+The voice loop sets `listening` when the wake word fires, when push-to-talk is held, and during the 8 s follow-up window. On the GPU, partial transcripts arrive about every 0.8 s while you talk. The final one goes out when the turn starts, after a `clear`.
 
 ```python
 await hud.state("listening")
 await hud.heard(partial_text, final=False)  # as words arrive
-await hud.heard(full_text, final=True)  # when you stop talking
-await hud.state("thinking")
+await hud.state("thinking")  # you stopped talking; transcribing
+await hud.clear()  # new question (jarvis/turns.py)
+await hud.heard(full_text, final=True)
 ```
 
-**3. In playback (voice_out, Chunk 2)**
+**3. In playback (done: `jarvis/voice_out.py`)**
 
-Until then, `jarvis/turns.py` sends `speech` as each sentence is generated.
+`Speaker` synthesizes the next sentence while the current one plays. In `--text` mode there's no audio, so `jarvis/turns.py` uses `Captions`, which sends `speech` as each sentence is generated.
 
 ```python
-await hud.state("speaking")
+# Speaker's play worker, simplified
 for sentence, audio in sentences:
+    await hud.state("speaking")
     await hud.speech(sentence)  # when this sentence starts playing
-    for chunk in audio:
-        play(chunk)
-        await hud.level(rms(chunk))  # about 20x per second
-await hud.state("idle")
+    for block in blocks_of_50ms(audio):
+        await hud.level(loudness(block))  # 20x per second
+        play(block)
+# then turns.py sends state "idle", and the loop opens the follow-up window ("listening")
 ```
 
 **Typed questions and push-to-talk** arrive on `hud.inbox` as `{"type": "text", "text": ...}` and `{"type": "ptt", "down": true|false}`.

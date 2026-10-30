@@ -75,26 +75,30 @@ Each is an in-process MCP server built with the Agent SDK, so there are no extra
 Make it talk and listen. This is the biggest chunk and the one most likely to fight back (see Risks).
 
 ### Speaking (`jarvis/voice_out.py`)
-- [ ] Piper with `en_US-ryan-medium`. Download the model on first run into a gitignored `models/` folder.
-- [ ] Sentence splitter on the streamed reply. Speak sentence 1 while sentence 2 is still generating.
-- [ ] Numbers spoken the way people say them. Prompt first, small `speakable()` cleanup pass second (tested).
-- [ ] `hud.speech` when each sentence's audio *starts playing*, `hud.level` about 20 times a second from playback loudness, state `speaking` and then `idle`
-- [ ] Short "listening" chime and a "Checking" filler if the first tool call runs long
+- [x] Piper with `en_US-ryan-medium`. Download the model on first run into a gitignored `models/` folder.
+- [x] Sentence splitter on the streamed reply. Speak sentence 1 while sentence 2 is still generating.
+- [x] Numbers spoken the way people say them. Prompt first, small `speakable()` cleanup pass second (tested).
+- [x] `hud.speech` when each sentence's audio *starts playing*, `hud.level` about 20 times a second from playback loudness, state `speaking` and then `idle`
+- [x] Short "listening" chime and a "Checking" filler if the first tool call runs long
 
 ### Listening (`jarvis/voice_in.py`)
-- [ ] Audio capture via `sounddevice`, 16 kHz mono, on the default Windows input device (WASAPI)
-- [ ] faster-whisper `small.en`. Try CUDA on the GTX 1660 Ti and fall back to CPU int8. Pass the custom vocab as `initial_prompt` / hotwords.
-- [ ] Push-to-talk first: HUD hold-Space (`ptt` events) → record → transcribe → agent
-- [ ] Then Silero VAD (stop after 0.7 s of silence) and openWakeWord `hey_jarvis` (always on, CPU)
-- [ ] Follow-up window: keep listening for 8 s after Jarvis finishes, no wake word needed
-- [ ] `hud.heard` partials and the final transcript, state `listening` then `thinking`
-- [ ] Audio never written to disk unless `debug: true`
+- [x] Audio capture via `sounddevice`, 16 kHz mono, on the default Windows input device (WASAPI)
+- [x] faster-whisper `small.en`. Try CUDA on the GTX 1660 Ti and fall back to CPU int8. Pass the custom vocab as `initial_prompt` / hotwords.
+- [x] Push-to-talk first: HUD hold-Space (`ptt` events) → record → transcribe → agent
+- [x] Then Silero VAD (stop after 0.7 s of silence) and openWakeWord `hey_jarvis` (always on, CPU)
+- [x] Follow-up window: keep listening for 8 s after Jarvis finishes, no wake word needed
+- [x] `hud.heard` partials and the final transcript, state `listening` then `thinking`
+- [x] Audio never written to disk unless `debug: true`
 
-### Main loop (`jarvis/main.py`)
-- [ ] One asyncio loop that owns the states: idle → listening → thinking → speaking → (follow-up) → idle
-- [ ] Voice and HUD text input both feed the same turn queue
+### Main loop (`jarvis/conversation.py`, started by `jarvis/main.py`)
+- [x] One asyncio loop that owns the states: idle → listening → thinking → speaking → (follow-up) → idle
+- [x] Voice and HUD text input both feed the same turn queue
 
 **Done when:** you can say "Hey Jarvis, how's USDC holding up?" and hear the answer, then follow up with "and Tether?" without the wake word.
+
+**Status: built and running (2026-10-29). Waiting on the PO's own voice test.** Tested by playing Piper's voice out of the laptop speakers into the laptop mic. "Hey Jarvis!" woke it, "How's USDC holding up?" was heard exactly, and the answer was spoken with live data. The follow-up with no wake word was captured and answered with Tether's real peg, though "And Tether?" came through as "That's Tether." The recording was clean but quiet (about −30 dB from speaker to mic). Push-to-talk (HUD hold-Space) and typed questions also work in voice mode. `--text` is unchanged.
+
+Measured on the GTX 1660 Ti: whisper `small.en` on CUDA transcribes a question in about 0.3 s. Wake word costs about 2 ms and VAD about 0.4 ms per 80 ms of audio. Piper runs about 20 times faster than real time. End of speech to first spoken word is about 5 s for a one-tool question: about 1 s for endpointing and transcription, the rest in the brain. "Checking." covers most of that gap when the tool is slow. The CPU fallback for whisper is coded but wasn't exercised, since CUDA worked.
 
 ---
 
@@ -104,8 +108,11 @@ Polish against the spec's performance targets.
 
 - [ ] Barge-in: VAD keeps running while Jarvis speaks. Speech cuts playback, cancels the in-flight reply, and starts a new turn. Needs headphones or a software echo canceller (see DECISIONS.md).
 - [ ] Timing log per turn: wake → listening, end of speech → first audio, tool time. Check it against spec section 10.
+- [ ] Latency: end of speech to first word is about 5 s on a one-tool question (target 2.5 s). Most of it is the brain. Start with prompt length, effort, and the 0.7 s silence.
+- [ ] Replies sometimes run to 4 sentences against `max_spoken_sentences: 3`. Tighten the prompt.
+- [ ] Global push-to-talk hotkey (`push_to_talk_hotkey`), if the HUD's hold-Space isn't enough (DECISIONS.md, open question 1)
 - [ ] Tune: whisper model size, VAD silence, wake sensitivity, prompt length and caching, effort level on the default model
-- [ ] Vocab accuracy check: read the vocab list aloud and measure hits (target 95%)
+- [ ] Vocab accuracy check: read the vocab list aloud and measure hits (target 95%). Set `debug: true` to keep the WAVs in `logs/audio/` for replaying through whisper. Watch short follow-ups ("And Tether?" came through as "That's Tether." in the speaker test).
 - [ ] False-wake check: an hour of normal room noise (target under 1 per hour)
 - [ ] Run the v1 "done when" test and fix what breaks
 
@@ -117,9 +124,9 @@ Polish against the spec's performance targets.
 
 | Risk | What we do |
 |---|---|
-| **Native deps on Windows.** CUDA for faster-whisper (cuDNN/cuBLAS DLLs) and Piper/openWakeWord wheels can be fiddly on Windows. | Test CUDA at the start of Chunk 2 and fall back to CPU int8 if it fights back. Write every gotcha in the root README. |
+| **Native deps on Windows.** CUDA for faster-whisper (cuDNN/cuBLAS DLLs) and Piper/openWakeWord wheels can be fiddly on Windows. | Done in Chunk 2. CUDA works through NVIDIA's pip wheels (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`), so there's no system CUDA install. `voice_in.py` adds their DLL folders to the path and warms whisper up on the main thread. CPU int8 is the fallback. Gotchas are in the root README. |
 | **Echo during barge-in.** No PulseAudio `module-echo-cancel` on Windows, so speaker output can trigger the VAD. | Headphones for v1. See DECISIONS.md. |
 | **Agent SDK latency.** The Agent SDK runs the Claude Code harness as a subprocess. It's heavier than a plain API call and may eat into the 2.5 s target. | Measured in Chunk 1: session start 1 to 3 s (once), then about 3 s to first text for a one-tool question. That's over the 2.5 s target but close. Tune prompt length and effort in Chunk 3 first. If it's still too slow, swap `agent.py` to the plain Anthropic SDK tool runner behind the same interface. Ask the PO first, since the spec names the Agent SDK. |
 | **yfinance on Windows.** Importing it (pandas, numpy) in a worker thread froze the app: the DLL load holds the OS loader lock and blocks every new thread. Its shared SQLite cache can also stall for minutes if another process is stuck. | Fixed in Chunk 1: yfinance is imported at startup on the main thread, and Yahoo calls get a 10 s budget per request, after which the symbol comes back as unavailable. |
 | **Free data API limits.** CoinGecko's free tier rate-limits, and yfinance is unofficial and flaky. | Short in-memory cache per symbol (about 30–60 s). Batch watchlist lookups. Return clean errors so Jarvis says "unavailable" instead of guessing. |
-| **Piper / openWakeWord install.** Native deps and ONNX models. | Pin versions in `pyproject.toml`. Put model downloads in a setup script. Write down every gotcha in the root README as it comes up. |
+| **Piper / openWakeWord install.** Native deps and ONNX models. | Done in Chunk 2. Both installed from wheels with no build step. openWakeWord runs its ONNX models (no tflite on Windows). Models download on first run, or up front with `uv run python -m jarvis.models`. |

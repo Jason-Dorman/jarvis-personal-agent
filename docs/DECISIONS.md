@@ -8,6 +8,18 @@ Format: **Decision**, then why, then the date.
 
 ## Decided
 
+- **CUDA comes from pip, not a system install.** `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` are dependencies (not on macOS). Whisper loads and warms up on the main thread at startup, then falls back to CPU int8 if CUDA fails. Beam size is 5 on the GPU and 1 on the CPU. *Why:* nothing to install by hand, and native DLLs loading in worker threads froze the app before (yfinance). *(2026-10-29)*
+- **Silero VAD is the v6 ONNX file that ships inside faster-whisper,** run on onnxruntime. *Why:* the official Silero package pulls in PyTorch (about 2 GB) for one small model. *(2026-10-29)*
+- **Audio goes through WASAPI with auto-convert.** The mic opens at 16 kHz and the speakers at Piper's 22.05 kHz, even though the hardware runs at 48 kHz. Devices are the Windows defaults unless `audio.input_device` / `audio.output_device` name one. *(2026-10-29)*
+- **`wake_word.sensitivity` means "higher wakes more easily".** The detection threshold is `1 - sensitivity`, so the default 0.5 is openWakeWord's recommended 0.5. *(2026-10-29)*
+- **Spoken cleanup (`speakable()`) spells tickers out letter by letter,** except words people say (HYPE, COIN, SOL, and a few English words in caps). It also rewrites `$` amounts, signed percents, and shorthand units. Captions keep the original text, so panel key words still match. *Why:* a Piper → whisper round trip showed "USDC" spoken as "Husk", "USDT" as "US", and "$77,000" garbled. *(2026-10-29)*
+- **"Checking." plays when a tool call has run for 0.8 s with nothing said yet,** once per turn. *Why:* a fixed timer would also fire on slow answers that use no tool, which sounds odd. *(2026-10-29)*
+- **Partial transcripts only on the GPU.** On CPU, a re-transcription every 0.8 s would slow the final one. *(2026-10-29)*
+- **Whisper's silence hallucinations are dropped,** including a bare "thank you". *Why:* whisper often "hears" these in noise. The cost is that thanking Jarvis gets no reply. *(2026-10-29)*
+- **Turn taking:** typed questions made while Jarvis is busy wait their turn. Push-to-talk presses made while it's busy are dropped. Typing or pressing push-to-talk while it's listening takes over from the voice capture. *(2026-10-29)*
+- **Added `Tether` and `watchlist` to the default `stt.vocab`.** *Why:* the spec's own follow-up is "and Tether?", and whisper wrote "watch list". *(2026-10-29)*
+- **The voice state machine lives in `jarvis/conversation.py`,** and `main.py` only wires things up. The plan had it in `main.py`. *Why:* one job per file. *(2026-10-29)*
+
 - **The brain runs at `effort: medium` by default,** set in `config.yaml` (`brain.effort`). *Why:* the spec puts accuracy first ("no made-up numbers"), and medium kept answers grounded in tool calls while staying near 3 s. Chunk 3 tunes it. *(2026-10-29)*
 - **Model names in config map to exact IDs** (`sonnet` → `claude-sonnet-5-5`, `opus` → `claude-opus-5-5`, `haiku` → `claude-haiku-5-5`) in `jarvis/config.py`, so a CLI alias can't drift to a different model. "Think hard" and "deep dive" switch to the deep model for that one question only. *(2026-10-29)*
 - **The brain session is isolated from this machine's Claude setup:** no `CLAUDE.md`, no user settings, no skills or subagents (`setting_sources=[]`, `tools=[]`), and prompts aren't expanded (`verbatim_prompts`). Verified at startup: the CLI lists exactly the 11 Jarvis MCP tools. *Why:* the read-only rule, and the dev `CLAUDE.md` in this repo is not Jarvis's personality. *(2026-10-29)*
@@ -35,7 +47,7 @@ Format: **Decision**, then why, then the date.
 
 Each one has a default. Work proceeds on the default unless the PO says otherwise.
 
-1. **Push-to-talk hotkey.** The spec says `ctrl+space` globally. Now that we're on native Windows, a global hook (e.g. `pynput`) can work. *Default:* ship the HUD's hold-Space (browser window focused) first, then add the global `ctrl+space` in Chunk 2 if it behaves.
+1. **Push-to-talk hotkey.** The spec says `ctrl+space` globally. Now that we're on native Windows, a global hook (e.g. `pynput`) can work. Chunk 2 shipped the HUD's hold-Space (browser window focused), and it works in voice mode. *Default:* leave the global hotkey for Chunk 3. A global keyboard hook sees every key you press, so say if you want it.
 2. **Echo cancellation for barge-in.** PulseAudio's `module-echo-cancel` isn't an option on Windows. *Default:* headphones for v1. Look at a software AEC in Chunk 3 only if barge-in on speakers matters.
 3. **Watchlist and theses file format.** *Default:* `watchlist.md` is one symbol per line as `- BTC` or `- SPY (stock)`. `theses.md` uses one `## heading` per thesis with free text under it. Chunk 0 seeded both files this way, with a starter watchlist (BTC, ETH, SOL, HYPE, SPY, QQQ, COIN) and one example thesis. Swap in your own.
 4. **Price data keys.** *Default:* CoinGecko's free/demo key if one is provided in `.env`, no key otherwise. Is there a paid key or a preferred source?

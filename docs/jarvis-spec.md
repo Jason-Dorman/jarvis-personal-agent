@@ -93,19 +93,23 @@ All audio stays local. Only the transcribed text goes to Claude.
 ## 6. Components
 
 ### 6.1 Wake word
-- **Tool:** openWakeWord. It ships a ready-made "hey jarvis" model.
-- Runs all the time on CPU. Very light.
-- Tune the sensitivity in `config.yaml`.
+- **Tool:** openWakeWord. It ships a ready-made "hey jarvis" model (ONNX, run on CPU).
+- Runs all the time while Jarvis is idle. About 2 ms per 80 ms of audio.
+- Tune `wake_word.sensitivity` in `config.yaml` (0 to 1, higher wakes more easily). The detection threshold is `1 - sensitivity`.
+- A short rising chime plays when it wakes, and when you press push-to-talk.
 
 ### 6.2 Voice detection
-- **Tool:** Silero VAD.
+- **Tool:** Silero VAD (the v6 ONNX model that ships with faster-whisper, so no PyTorch).
 - Tells the system when you start and stop talking.
-- Stop after 0.7 seconds of silence.
+- Stop after 0.7 seconds of silence (`vad.silence_seconds`). Bursts shorter than about a quarter second (a cough, a click) don't count as speech.
+- After the wake word, Jarvis waits up to 4 seconds for the question to start.
 
 ### 6.3 Speech-to-text
 - **Tool:** faster-whisper (Linux/Windows) or whisper.cpp / mlx-whisper (Apple Silicon).
 - Model: `small.en` to start. Move up to `medium.en` if accuracy is weak.
-- Add a custom vocabulary list so it hears finance words right: USDC, USDT, perps, RWA, Hyperliquid, basis, T-bills, etc.
+- Runs on the GPU (CUDA) when it can and falls back to CPU (`stt.device: auto`). On the GPU, partial transcripts go to the HUD about every 0.8 s while you talk.
+- Add a custom vocabulary list so it hears finance words right: USDC, USDT, perps, RWA, Hyperliquid, basis, T-bills, etc. The list is passed to whisper as its starting prompt.
+- A leading wake phrase ("Hey Jarvis, ...") is dropped from the transcript. So are whisper's usual silence hallucinations ("you", "thank you", "thanks for watching"). If nothing is left, Jarvis says nothing and goes back to waiting.
 
 ### 6.4 Brain
 - **Tool:** Claude Agent SDK, Python.
@@ -122,9 +126,17 @@ All audio stays local. Only the transcribed text goes to Claude.
   - Every number must come from a tool call. If no tool has it, say so.
 
 ### 6.5 Text-to-speech
-- **Tool:** Piper. Runs locally and fast.
-- Speak sentence by sentence as the answer streams in. Don't wait for the full reply.
+- **Tool:** Piper (`en_US-ryan-medium`). Runs locally on CPU, about 20 times faster than real time.
+- Speak sentence by sentence as the answer streams in. Don't wait for the full reply. The next sentence is synthesized while the current one plays.
 - Pick one voice and keep it.
+- **Spoken cleanup.** The prompt asks for spoken numbers. A cleanup pass (`speakable()`) fixes what slips through before Piper sees it: tickers are spelled out letter by letter (Piper says "USDC" as "Husk"), except ones people say as words (HYPE, COIN, SOL). It also handles `$1.2B` → "1.2 billion dollars", `$0.9998` → "99.98 cents", signed percents, `24h`, `bps`, and stray markdown or links. Only the audio gets this text. Captions show the sentence as written.
+- **"Checking."** If a tool call has run for 0.8 seconds and nothing has been said yet, Jarvis says "Checking." once, then goes back to working.
+
+### 6.5a Turn taking
+- One question is answered at a time. Voice, push-to-talk, and typed questions (HUD or terminal) all feed the same queue.
+- A question typed while Jarvis is busy waits its turn. Push-to-talk presses made while Jarvis is busy are dropped. Interrupting is barge-in (6.6).
+- Typing or pressing push-to-talk while Jarvis is listening takes over from the voice capture.
+- Voice mode quits on `quit` (typed) or when the terminal's input closes.
 
 ### 6.6 Barge-in
 - While Jarvis speaks, VAD keeps listening.
@@ -188,7 +200,7 @@ The full text is saved to `briefs/YYYY-MM-DD.md`. Asking again on the same day r
 - **Read-only.** No tool can trade, transfer, or send messages.
 - **No made-up numbers.** If a tool fails, Jarvis says the data is unavailable.
 - **Secrets** live in `.env`. Never in code or notes.
-- **Audio** is never saved to disk unless you turn on debug mode.
+- **Audio** is never saved to disk unless you turn on debug mode. In debug mode each captured question is saved to `logs/audio/` as a WAV.
 - **Logs** stay local.
 
 ---
@@ -214,11 +226,20 @@ wake_word:
   model: hey_jarvis
   sensitivity: 0.5
 followup_window_seconds: 8
-push_to_talk_hotkey: "ctrl+space"
+push_to_talk_hotkey: "ctrl+space"   # not wired yet: the HUD's hold-Space is push-to-talk
+
+audio:
+  input_device: null        # null = Windows default; or part of a device name
+  output_device: null
+
+vad:
+  threshold: 0.5            # speech probability that counts as talking
+  silence_seconds: 0.7
 
 stt:
   model: small.en
-  vocab: [USDC, USDT, perps, RWA, Hyperliquid, basis, T-bills, stablecoin]
+  device: auto              # auto (CUDA, else CPU) | cuda | cpu
+  vocab: [USDC, USDT, Tether, perps, RWA, Hyperliquid, basis, T-bills, stablecoin, watchlist]
 
 brain:
   default_model: sonnet      # sonnet → claude-sonnet-5-5
@@ -242,7 +263,7 @@ news_feeds:
 debug: false                # true lets audio touch disk for troubleshooting
 ```
 
-Unknown keys and out-of-range values are rejected at startup. Relative file paths resolve against the folder `config.yaml` is in. Model names `sonnet`, `opus`, and `haiku` map to exact model IDs in `jarvis/config.py`. Any other value is passed through as a model ID.
+Unknown keys and out-of-range values are rejected at startup. So is an audio device name that matches no device (the error lists the devices it found). Relative file paths resolve against the folder `config.yaml` is in. Model names `sonnet`, `opus`, and `haiku` map to exact model IDs in `jarvis/config.py`. Any other value is passed through as a model ID.
 
 ---
 
@@ -256,15 +277,18 @@ jarvis/
 ├── config.yaml
 ├── jarvis/
 │   ├── config.py           # typed settings from config.yaml
-│   ├── main.py             # entry point: --text REPL + HUD now, voice loop in Chunk 2
+│   ├── main.py             # entry point: voice (default) or --text, plus the HUD
+│   ├── conversation.py     # the turn loops: voice states, follow-up, input queue
 │   ├── runtime.py          # startup shared by entry points: .env, config, db, services
-│   ├── voice_in.py         # wake word, VAD, speech-to-text (Chunk 2)
-│   ├── voice_out.py        # Piper, streaming, barge-in (Chunk 2)
+│   ├── audio.py            # audio devices (WASAPI on Windows)
+│   ├── models.py           # model downloads into models/; `python -m jarvis.models`
+│   ├── voice_in.py         # mic, wake word, VAD, speech-to-text
+│   ├── voice_out.py        # Piper, sentence pipeline, chime (barge-in in Chunk 3)
 │   ├── agent.py            # Claude + tool wiring + voice rules
 │   ├── hooks.py            # pre/post tool hooks: HUD events, tool log, panel hints
 │   ├── cards.py            # HUD panels built from tool results
 │   ├── turns.py            # one question → streamed answer, HUD kept in step
-│   ├── speech.py           # sentence splitter for the streamed reply
+│   ├── speech.py           # sentence splitter + speakable() cleanup for the voice
 │   ├── brief.py            # brief data + save; `python -m jarvis.brief` for text-only
 │   └── memory.py           # SQLite read/write
 ├── tools/
@@ -284,6 +308,7 @@ jarvis/
 │   └── inbox.md            # other saved thoughts, created on first use
 ├── briefs/
 ├── logs/
+├── models/                 # Piper voice, wake word, whisper. Downloaded, gitignored
 └── jarvis.db
 ```
 

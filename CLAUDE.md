@@ -42,8 +42,9 @@ Python 3.12, managed with `uv`. Claude Agent SDK for the brain (Sonnet `claude-s
 uv sync                                  # install
 uv run pytest                            # tests
 uv run ruff check . && uv run ruff format .
-uv run python -m jarvis.main --text      # typed REPL + HUD (Chunk 1)
-uv run python -m jarvis.main             # full voice (Chunk 2+)
+uv run python -m jarvis.main             # full voice + HUD
+uv run python -m jarvis.main --text      # typed REPL + HUD, no audio
+uv run python -m jarvis.models           # download Piper / wake word / whisper models
 uv run python -m jarvis.brief            # print and save a morning brief
 uv run python hud/server.py --demo       # HUD only, test turns
 ```

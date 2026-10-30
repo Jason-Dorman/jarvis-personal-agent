@@ -21,6 +21,7 @@ DB_PATH = ROOT / "jarvis.db"
 NOTES_DIR = ROOT / "notes"
 BRIEFS_DIR = ROOT / "briefs"
 LOGS_DIR = ROOT / "logs"
+MODELS_DIR = ROOT / "models"  # downloaded on first run, gitignored
 
 
 class _Section(BaseModel):
@@ -29,11 +30,22 @@ class _Section(BaseModel):
 
 class WakeWord(_Section):
     model: str = "hey_jarvis"
-    sensitivity: float = Field(0.5, ge=0, le=1)
+    sensitivity: float = Field(0.5, ge=0, le=1)  # higher wakes more easily
+
+
+class Audio(_Section):
+    input_device: str | None = None  # None = Windows default; else part of the device name
+    output_device: str | None = None
+
+
+class Vad(_Section):
+    threshold: float = Field(0.5, gt=0, lt=1)
+    silence_seconds: float = Field(0.7, gt=0)
 
 
 class Stt(_Section):
     model: str = "small.en"
+    device: Literal["auto", "cuda", "cpu"] = "auto"
     vocab: list[str] = []
 
 
@@ -68,6 +80,8 @@ class Config(_Section):
     wake_word: WakeWord = WakeWord()
     followup_window_seconds: float = Field(8, ge=0)
     push_to_talk_hotkey: str | None = None
+    audio: Audio = Audio()
+    vad: Vad = Vad()
     stt: Stt = Stt()
     brain: Brain = Brain()
     tts: Tts = Tts()

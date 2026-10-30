@@ -4,9 +4,18 @@ wake_word:
 followup_window_seconds: 8
 push_to_talk_hotkey: "ctrl+space"   # v1 uses the HUD's hold-Space; global hook comes later
 
+audio:
+  input_device: null        # null = Windows default mic; or part of a device name
+  output_device: null       # null = Windows default speakers; e.g. "USB Audio"
+
+vad:
+  threshold: 0.5            # speech probability that counts as talking
+  silence_seconds: 0.7      # stop listening after this much quiet
+
 stt:
   model: small.en
-  vocab: [USDC, USDT, perps, RWA, Hyperliquid, basis, T-bills, stablecoin]
+  device: auto              # auto (CUDA if it works, else CPU) | cuda | cpu
+  vocab: [USDC, USDT, Tether, perps, RWA, Hyperliquid, basis, T-bills, stablecoin, watchlist]
 
 brain:
   default_model: sonnet
